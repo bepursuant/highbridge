@@ -21,12 +21,13 @@ internal sealed class TwainThread : IDisposable
 
     public TwainThread(string name)
     {
-        var ready = new TaskCompletionSource<Form>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ready = new TaskCompletionSource<TwainWindow>(TaskCreationOptions.RunContinuationsAsynchronously);
         _thread = new Thread(() => Run(ready)) { IsBackground = true, Name = name };
         _thread.SetApartmentState(ApartmentState.STA);
         _thread.Start();
-        _window = ready.Task.GetAwaiter().GetResult();
-        WindowHandle = _window.Handle;
+        TwainWindow created = ready.Task.GetAwaiter().GetResult();
+        _window = created.Form;
+        WindowHandle = created.Handle;
     }
 
     /// <summary>The hidden window used as the TWAIN parent window (TW_USERINTERFACE.hParent).</summary>
@@ -78,14 +79,15 @@ internal sealed class TwainThread : IDisposable
         }
     }
 
-    private static void Run(TaskCompletionSource<Form> ready)
+    private static void Run(TaskCompletionSource<TwainWindow> ready)
     {
         Form window;
+        IntPtr handle;
         try
         {
             // Never shown; creating it also installs the thread's WindowsFormsSynchronizationContext.
             window = new Form { ShowInTaskbar = false, Text = "papertrail TWAIN" };
-            _ = window.Handle;
+            handle = window.Handle;
         }
         catch (Exception ex)
         {
@@ -93,8 +95,10 @@ internal sealed class TwainThread : IDisposable
             return;
         }
 
-        ready.SetResult(window);
+        ready.SetResult(new TwainWindow(window, handle));
         Application.Run();
         window.Dispose();
     }
+
+    private readonly record struct TwainWindow(Form Form, IntPtr Handle);
 }
