@@ -124,6 +124,8 @@ dotnet run --project samples/Highbridge.SampleSite     # demo page on http://127
 
 Open http://127.0.0.1:47200, click **Connect**, then **Scan**. The mock scanner offers a duplex feeder, a flatbed, a "jammed" device for testing errors, and **highbridge mock feeder with barcode test sheets**: A4 pages with every supported barcode, turned and skewed. Tick **Find barcodes** and scan that device to see them listed.
 
+The **Card reader** tab lists readers and reads a card with the same options as `readCard`: reader, interface (`auto`, `contact`, or `contactless`), an optional application id, and how long to wait. The mock offers a reader with a Visa and a Mastercard (last four `1234`, expiry `2028-12`, name `DOE/JOHN`; `A0000000041010` selects the Mastercard), a reader with no card, and a reader with no payment applications.
+
 To print those sheets and try them on a real scanner: `dotnet run --project src/Highbridge.DevHost -- --write-barcode-sheets ./sheets` writes three PNGs at 300 dpi. Print each on A4, fit to the page.
 
 To simulate a `highbridge://` launch (after the sample page has been paired), pass the URL to a second dev host process. It forwards the URL to the running one, which is what Windows does when a link is clicked. The scan waits until something polls `GET /v1/scans/0123456789abcdef0123` with the sample page's `Origin`, and is dropped after 30 seconds otherwise:

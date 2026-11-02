@@ -33,43 +33,51 @@ function setConnection(kind, text) {
   connection.textContent = text;
 }
 
-function showError(err) {
-  errorBox.replaceChildren();
+function showError(box, err) {
+  box.replaceChildren();
   const message = err instanceof HighbridgeError ? err.message : `Unexpected error: ${err?.message ?? err}`;
   const text = document.createElement('p');
   text.textContent = message;
-  errorBox.append(text);
+  box.append(text);
   if (err instanceof HighbridgeError && err.code === 'setup_required' && err.details?.installerUrl) {
     const link = document.createElement('a');
     link.href = err.details.installerUrl;
     link.target = '_blank';
     link.rel = 'noopener';
     link.textContent = 'Download the highbridge installer';
-    errorBox.append(link);
+    box.append(link);
     const hint = document.createElement('p');
     hint.className = 'hint';
     hint.textContent = 'If highbridge is already installed, start it from the Start menu and try again.';
-    errorBox.append(hint);
+    box.append(hint);
   }
-  errorBox.hidden = false;
+  box.hidden = false;
+  box.scrollIntoView({ block: 'nearest' });
 }
 
-function clearError() {
-  errorBox.hidden = true;
-  errorBox.replaceChildren();
+function clearError(box) {
+  box.hidden = true;
+  box.replaceChildren();
 }
 
 async function refreshStatus() {
   try {
     const status = await client.status();
+    const devices = deviceLabel(status);
     if (!status) setConnection('off', 'highbridge not running');
-    else if (!status.paired) setConnection('warn', `Connected (${status.backend}) · not approved`);
-    else setConnection('ok', `Ready · ${status.backend} · v${status.version}`);
+    else if (!status.paired) setConnection('warn', `Connected (${devices}) · not approved`);
+    else setConnection('ok', `Ready · ${devices} · v${status.version}`);
     return status;
   } catch (err) {
     setConnection('off', 'Unavailable');
     return null;
   }
+}
+
+function deviceLabel(status) {
+  if (!status?.devices?.length) return status?.backend ?? 'highbridge';
+  const names = { scanner: 'scanner', cardReader: 'card reader' };
+  return status.devices.map((device) => `${device.backend} ${names[device.kind] ?? device.kind}`).join(', ');
 }
 
 async function loadScanners() {
@@ -217,7 +225,7 @@ function renderPages(pages, barcodes) {
 }
 
 connectButton.addEventListener('click', async () => {
-  clearError();
+  clearError(errorBox);
   connectButton.disabled = true;
   connectButton.textContent = 'Connecting…';
   try {
@@ -225,7 +233,7 @@ connectButton.addEventListener('click', async () => {
     await loadScanners();
     connectButton.textContent = 'Refresh';
   } catch (err) {
-    showError(err);
+    showError(errorBox, err);
     connectButton.textContent = 'Connect';
   } finally {
     connectButton.disabled = false;
@@ -235,7 +243,7 @@ connectButton.addEventListener('click', async () => {
 
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
-  clearError();
+  clearError(errorBox);
   scanButton.disabled = true;
   scanButton.classList.add('busy');
   progress.textContent = 'Contacting highbridge…';
@@ -259,7 +267,7 @@ form.addEventListener('submit', async (event) => {
     if (scannerSelect.disabled) loadScanners().catch(() => {});
   } catch (err) {
     progress.textContent = '';
-    showError(err);
+    showError(errorBox, err);
   } finally {
     scanButton.disabled = false;
     scanButton.classList.remove('busy');
@@ -276,6 +284,210 @@ clearButton.addEventListener('click', () => {
   clearButton.hidden = true;
 });
 
+const cardForm = $('card-form');
+const readButton = $('read-card');
+const cardConnect = $('card-connect');
+const readerSelect = $('reader');
+const cardProgress = $('card-progress');
+const cardError = $('card-error');
+const cardApps = $('card-apps');
+const cardEmpty = $('card-empty');
+const cardClear = $('card-clear');
+const cardSummary = $('card-summary');
+const scanTab = $('tab-scan');
+const cardTab = $('tab-card');
+const scanView = $('view-scan');
+const cardView = $('view-card');
+
+const CARD_STATUS = {
+  queued: 'Waiting to read the card…',
+  reading: 'Reading the card…',
+};
+
+function selectTab(name, { focus = false } = {}) {
+  const card = name === 'card';
+  scanView.hidden = card;
+  cardView.hidden = !card;
+  scanTab.setAttribute('aria-selected', String(!card));
+  cardTab.setAttribute('aria-selected', String(card));
+  scanTab.tabIndex = card ? -1 : 0;
+  cardTab.tabIndex = card ? 0 : -1;
+  const url = new URL(location.href);
+  url.hash = card ? 'card' : '';
+  history.replaceState(null, '', url);
+  if (focus) (card ? cardTab : scanTab).focus();
+  // A click may list readers after Connect already approved the site. Page load must not
+  // fetch loopback on its own; the permission check below does that only when it is allowed.
+  if (card && focus && readerSelect.disabled && connection.classList.contains('pill-ok')) {
+    loadReaders().catch(() => {});
+  }
+}
+
+function dash(value) {
+  return value === undefined || value === null || value === '' ? '—' : String(value);
+}
+
+async function loadReaders() {
+  const readers = await client.listCardReaders();
+  const current = readerSelect.value;
+  readerSelect.replaceChildren(new Option('Default reader', ''));
+  for (const reader of readers) {
+    readerSelect.add(new Option(reader.name, reader.id));
+  }
+  readerSelect.value = readers.some((reader) => reader.id === current) ? current : '';
+  readerSelect.disabled = false;
+}
+
+function readCardOptions() {
+  const data = new FormData(cardForm);
+  const aid = String(data.get('aid') ?? '').trim();
+  const wait = Number(data.get('waitForCardMs'));
+  return {
+    readerId: data.get('readerId') || undefined,
+    interface: data.get('interface'),
+    ...(aid ? { aid } : {}),
+    waitForCardMs: Number.isFinite(wait) ? wait : undefined,
+  };
+}
+
+function renderCard(result) {
+  cardApps.replaceChildren();
+  const selectedAid = result.selected.aid.toUpperCase();
+  for (const app of result.applications) {
+    const selected = app.aid.toUpperCase() === selectedAid;
+    const item = document.createElement('li');
+    item.className = selected ? 'page card-app selected' : 'page card-app';
+    const face = document.createElement('div');
+    face.className = 'card-face';
+    const chip = document.createElement('span');
+    chip.className = 'card-chip';
+    chip.textContent = selected ? 'Selected' : 'On card';
+    const label = document.createElement('strong');
+    label.textContent = app.label || app.preferredName || 'Application';
+    face.append(chip, label);
+    if (selected) {
+      const pan = document.createElement('span');
+      pan.className = 'card-pan';
+      pan.textContent = `•••• ${result.selected.panLast4}`;
+      const row = document.createElement('span');
+      row.className = 'card-row';
+      const name = document.createElement('span');
+      name.textContent = dash(result.selected.cardholderName);
+      const expiry = document.createElement('span');
+      expiry.textContent = result.selected.expiry;
+      row.append(name, expiry);
+      face.append(pan, row);
+    } else {
+      const note = document.createElement('span');
+      note.textContent = 'Directory entry. Details are returned for the selected application.';
+      face.append(note);
+    }
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const title = document.createElement('strong');
+    title.textContent = app.preferredName || app.label || 'Application';
+    const aid = document.createElement('span');
+    aid.className = 'aid';
+    aid.textContent = app.aid;
+    const priority = document.createElement('span');
+    priority.textContent = app.priority == null ? 'No priority' : `Priority ${app.priority}`;
+    meta.append(title, aid, priority);
+    item.append(face, meta);
+    cardApps.append(item);
+  }
+
+  const rows = $('card-rows');
+  rows.replaceChildren();
+  for (const app of result.applications) {
+    const selected = app.aid.toUpperCase() === selectedAid;
+    const fields = selected ? result.selected : app;
+    const row = rows.insertRow();
+    if (selected) row.className = 'selected';
+    for (const value of [
+      app.aid,
+      dash(fields.label),
+      dash(fields.preferredName),
+      dash(fields.priority),
+      selected ? result.selected.panLast4 : '—',
+      selected ? result.selected.expiry : '—',
+      selected ? dash(result.selected.cardholderName) : '—',
+    ]) {
+      row.insertCell().textContent = value;
+    }
+  }
+  $('card-details').hidden = rows.rows.length === 0;
+  const iface = result.interface === 'contactless' ? 'contactless' : 'contact';
+  cardSummary.textContent = `${result.reader.name} · ${iface} · ${result.applications.length} application(s) · ${result.id}`;
+  cardSummary.hidden = false;
+  cardEmpty.hidden = cardApps.children.length > 0;
+  cardClear.hidden = cardApps.children.length === 0;
+}
+
+scanTab.addEventListener('click', () => selectTab('scan', { focus: true }));
+cardTab.addEventListener('click', () => selectTab('card', { focus: true }));
+for (const tab of [scanTab, cardTab]) {
+  tab.addEventListener('keydown', (event) => {
+    if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+    event.preventDefault();
+    selectTab(tab === scanTab ? 'card' : 'scan', { focus: true });
+  });
+}
+
+cardConnect.addEventListener('click', async () => {
+  clearError(cardError);
+  cardConnect.disabled = true;
+  cardConnect.textContent = 'Connecting…';
+  try {
+    await client.connect();
+    await loadReaders();
+    cardConnect.textContent = 'Refresh';
+  } catch (err) {
+    showError(cardError, err);
+    cardConnect.textContent = 'Connect';
+  } finally {
+    cardConnect.disabled = false;
+    refreshStatus();
+  }
+});
+
+cardForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  clearError(cardError);
+  readButton.disabled = true;
+  readButton.classList.add('busy');
+  cardProgress.textContent = 'Contacting highbridge…';
+  try {
+    const result = await client.readCard(readCardOptions(), {
+      onProgress: (job) => {
+        cardProgress.textContent = CARD_STATUS[job.status] ?? '';
+      },
+    });
+    renderCard(result);
+    const name = result.selected.preferredName || result.selected.label || result.selected.aid;
+    cardProgress.textContent = `Done · ${name} · •••• ${result.selected.panLast4} · ${result.selected.expiry}`;
+    if (readerSelect.disabled) loadReaders().catch(() => {});
+  } catch (err) {
+    cardProgress.textContent = '';
+    showError(cardError, err);
+  } finally {
+    readButton.disabled = false;
+    readButton.classList.remove('busy');
+    refreshStatus();
+  }
+});
+
+cardClear.addEventListener('click', () => {
+  cardApps.replaceChildren();
+  $('card-rows').replaceChildren();
+  $('card-details').hidden = true;
+  cardSummary.hidden = true;
+  cardEmpty.hidden = false;
+  cardClear.hidden = true;
+});
+
+if (location.hash === '#card') selectTab('card');
+
 // Don't trigger the browser's loopback permission prompt on page load; wait for a click.
 const permission = await client.loopbackPermission();
 if (permission === 'prompt') {
@@ -284,5 +496,8 @@ if (permission === 'prompt') {
   setConnection('off', 'Blocked by browser settings');
 } else {
   const status = await refreshStatus();
-  if (status?.paired) loadScanners().catch(() => {});
+  if (status?.paired) {
+    loadScanners().catch(() => {});
+    if (!cardView.hidden) loadReaders().catch(() => {});
+  }
 }
