@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>papertrail demo - scan from your browser</title>
+  <title>highbridge demo - scan from your browser</title>
   <link rel="icon" href="logo.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -11,7 +11,7 @@
   <header class="topbar">
     <div class="brand">
       <img class="logo" src="logo.svg" alt="" width="32" height="32" />
-      <span>papertrail</span>
+      <span>highbridge</span>
       <span class="tag">demo</span>
     </div>
     <div id="connection" class="pill pill-unknown" role="status" aria-live="polite">Checking…</div>
@@ -20,7 +20,7 @@
   <main class="layout">
     <section class="panel controls" aria-labelledby="scan-heading">
       <h1 id="scan-heading">Scan a document</h1>
-      <p class="lede">This page asks the papertrail app on your computer to scan with your TWAIN scanner and sends the pages back here. Nothing is uploaded anywhere.</p>
+      <p class="lede">This page asks the highbridge app on your computer to scan with your TWAIN scanner and sends the pages back here. Nothing is uploaded anywhere.</p>
 
       <form id="scan-form" novalidate>
         <label class="field">
@@ -66,7 +66,7 @@
           <label><input type="radio" name="stamp" value="top" /><span>Top</span></label>
           <label><input type="radio" name="stamp" value="bottom" /><span>Bottom</span></label>
         </fieldset>
-        <p class="hint">Adds a band with the scan time, computer, Windows user, scanner, page number, this site and a scan id. papertrail fills it in; the page only picks where it goes.</p>
+        <p class="hint">Adds a band with the scan time, computer, Windows user, scanner, page number, this site and a scan id. highbridge fills it in; the page only picks where it goes.</p>
 
         <label class="check"><input type="checkbox" name="duplex" /> Scan both sides (duplex)</label>
         <label class="check"><input type="checkbox" name="showDriverUi" /> Use the scanner's own settings dialog</label>
@@ -81,9 +81,9 @@
       <details class="howto">
         <summary>How this works</summary>
         <ol>
-          <li>The page talks to papertrail at <code>http://127.0.0.1:47115</code>. Your browser may ask to let this site reach apps on your device. Allow it.</li>
-          <li>The first time, papertrail asks you to approve this website. After that, Scan starts the scanner straight away.</li>
-          <li>If papertrail is not running, the page opens a <code>papertrail://</code> link to start it. If it is not installed, the page links to the one-time installer.</li>
+          <li>The page talks to highbridge at <code>http://127.0.0.1:47116</code>. Your browser may ask to let this site reach apps on your device. Allow it.</li>
+          <li>The first time, highbridge asks you to approve this website. After that, Scan starts the scanner straight away.</li>
+          <li>If highbridge is not running, the page opens a <code>highbridge://</code> link to start it. If it is not installed, the page links to the one-time installer.</li>
         </ol>
       </details>
     </section>
@@ -108,7 +108,7 @@
     </section>
   </main>
 
-  <footer class="foot">papertrail demo. The scanner app stays on this computer; this page only talks to it.</footer>
+  <footer class="foot">highbridge demo. The scanner app stays on this computer; this page only talks to it.</footer>
 
   <script type="module" src="app.js"></script>
 </body>

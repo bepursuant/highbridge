@@ -1,15 +1,15 @@
 // End-to-end: drives the real dev host (mock scanner) through the JS client, including the
-// papertrail://scan path, where "opening the link" runs a second dev host process that forwards
+// highbridge://scan path, where "opening the link" runs a second dev host process that forwards
 // the URL to the running one over the single-instance pipe (what Windows does via the registry).
 //
-// Run: dotnet build src/Papertrail.DevHost && PAPERTRAIL_DEVHOST_DLL=src/Papertrail.DevHost/bin/Debug/net10.0/Papertrail.DevHost.dll node --test "clients/js/test/*.test.mjs"
+// Run: dotnet build src/Highbridge.DevHost && HIGHBRIDGE_DEVHOST_DLL=src/Highbridge.DevHost/bin/Debug/net10.0/Highbridge.DevHost.dll node --test "clients/js/test/*.test.mjs"
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFile } from 'node:child_process';
-import { PapertrailClient, PapertrailError } from '../papertrail.js';
+import { HighbridgeClient, HighbridgeError } from '../highbridge.js';
 
-const DLL = process.env.PAPERTRAIL_DEVHOST_DLL;
+const DLL = process.env.HIGHBRIDGE_DEVHOST_DLL;
 const PORT = 47190 + Math.floor(Math.random() * 9);
 const ORIGIN = 'https://app.example.com';
 let host;
@@ -20,14 +20,14 @@ const withOrigin = (origin) => (url, init = {}) => fetch(url, { ...init, headers
 before(async () => {
   if (!DLL) return;
   host = spawn('dotnet', [DLL, '--port', String(PORT), '--page-delay-ms', '5'], { stdio: ['ignore', 'pipe', 'inherit'] });
-  const probe = new PapertrailClient({ port: PORT, fetch: withOrigin(ORIGIN), origin: ORIGIN, storage: null });
+  const probe = new HighbridgeClient({ port: PORT, fetch: withOrigin(ORIGIN), origin: ORIGIN, storage: null });
   for (let i = 0; i < 100 && !(await probe.status()); i++) await new Promise((r) => setTimeout(r, 100));
 });
 
 after(() => host?.kill());
 
-test('e2e: pair + scan over HTTP returns real PNG pages', { skip: !DLL && 'set PAPERTRAIL_DEVHOST_DLL' }, async () => {
-  const client = new PapertrailClient({ port: PORT, fetch: withOrigin(ORIGIN), origin: ORIGIN, storage: null, pollIntervalMs: 50 });
+test('e2e: pair + scan over HTTP returns real PNG pages', { skip: !DLL && 'set HIGHBRIDGE_DEVHOST_DLL' }, async () => {
+  const client = new HighbridgeClient({ port: PORT, fetch: withOrigin(ORIGIN), origin: ORIGIN, storage: null, pollIntervalMs: 50 });
   const status = await client.connect({ launch: false });
   assert.equal(status.backend, 'mock');
 
@@ -40,12 +40,12 @@ test('e2e: pair + scan over HTTP returns real PNG pages', { skip: !DLL && 'set P
   assert.deepEqual([...bytes.slice(1, 4)], [80, 78, 71]); // "PNG"
 });
 
-test('e2e: papertrail://scan forwarded from a second process is collected by request id', { skip: !DLL && 'set PAPERTRAIL_DEVHOST_DLL' }, async () => {
+test('e2e: highbridge://scan forwarded from a second process is collected by request id', { skip: !DLL && 'set HIGHBRIDGE_DEVHOST_DLL' }, async () => {
   const storage = new Map();
-  storage.set('papertrail.paired', `http://127.0.0.1:${PORT}`);
+  storage.set('highbridge.paired', `http://127.0.0.1:${PORT}`);
   let online = false;
   const launched = [];
-  const client = new PapertrailClient({
+  const client = new HighbridgeClient({
     port: PORT,
     origin: ORIGIN,
     pollIntervalMs: 50,
@@ -62,18 +62,18 @@ test('e2e: papertrail://scan forwarded from a second process is collected by req
 
   const result = await client.scan({ source: 'flatbed', dpi: 150 });
   assert.equal(launched.length, 1);
-  assert.match(launched[0], /^papertrail:\/\/scan\?/);
+  assert.match(launched[0], /^highbridge:\/\/scan\?/);
   assert.equal(result.pages.length, 1);
 });
 
-test('e2e: stamped scan adds the provenance band and returns the record', { skip: !DLL && 'set PAPERTRAIL_DEVHOST_DLL' }, async () => {
-  const client = new PapertrailClient({ port: PORT, fetch: withOrigin(ORIGIN), origin: ORIGIN, storage: null, pollIntervalMs: 50 });
+test('e2e: stamped scan adds the provenance band and returns the record', { skip: !DLL && 'set HIGHBRIDGE_DEVHOST_DLL' }, async () => {
+  const client = new HighbridgeClient({ port: PORT, fetch: withOrigin(ORIGIN), origin: ORIGIN, storage: null, pollIntervalMs: 50 });
   await client.connect({ launch: false });
   const plain = await client.scan({ source: 'flatbed', colorMode: 'gray' });
 
   const result = await client.scan({ source: 'feeder', maxPages: 2, colorMode: 'gray', stamp: { position: 'bottom' } });
 
-  assert.match(result.stamp.scanId, /^PT-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
+  assert.match(result.stamp.scanId, /^HB-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
   assert.equal(result.pages.length, 2);
   for (const [i, page] of result.pages.entries()) {
     const p = page.provenance;
@@ -84,20 +84,20 @@ test('e2e: stamped scan adds the provenance band and returns the record', { skip
     assert.match(p.user, /\\/);
     assert.equal(page.height, plain.pages[0].height + p.bandHeight);
     const text = new TextDecoder('latin1').decode(await page.blob.arrayBuffer());
-    assert.ok(text.includes('iTXtpapertrail:provenance'));
+    assert.ok(text.includes('iTXthighbridge:provenance'));
     assert.ok(text.includes(p.originalSha256));
   }
   assert.equal(plain.pages[0].provenance, undefined);
 });
 
-test('e2e: pages cannot put their own text in the stamp', { skip: !DLL && 'set PAPERTRAIL_DEVHOST_DLL' }, async () => {
-  const client = new PapertrailClient({ port: PORT, fetch: withOrigin(ORIGIN), origin: ORIGIN, storage: null });
+test('e2e: pages cannot put their own text in the stamp', { skip: !DLL && 'set HIGHBRIDGE_DEVHOST_DLL' }, async () => {
+  const client = new HighbridgeClient({ port: PORT, fetch: withOrigin(ORIGIN), origin: ORIGIN, storage: null });
   await client.connect({ launch: false });
   await assert.rejects(client._json('POST', '/v1/scans', { stamp: { position: 'top', user: 'CEO' } }), (err) => err.code === 'invalid_options');
 });
 
-test('e2e: barcode scan returns rotated codes from the mock barcode sheet', { skip: !DLL && 'set PAPERTRAIL_DEVHOST_DLL' }, async () => {
-  const client = new PapertrailClient({ port: PORT, fetch: withOrigin(ORIGIN), origin: ORIGIN, storage: null, pollIntervalMs: 50 });
+test('e2e: barcode scan returns rotated codes from the mock barcode sheet', { skip: !DLL && 'set HIGHBRIDGE_DEVHOST_DLL' }, async () => {
+  const client = new HighbridgeClient({ port: PORT, fetch: withOrigin(ORIGIN), origin: ORIGIN, storage: null, pollIntervalMs: 50 });
   await client.connect({ launch: false });
 
   const result = await client.scan({ scannerId: 'mock-barcodes', dpi: 120, maxPages: 1, barcodes: true });
@@ -105,7 +105,7 @@ test('e2e: barcode scan returns rotated codes from the mock barcode sheet', { sk
   assert.equal(result.pages.length, 1);
   assert.equal(result.pages[0].barcodeStatus, 'done');
   const byText = Object.fromEntries(result.barcodes.map((b) => [b.text, b]));
-  const upright = byText['https://papertrail.example/doc/P1-R0'];
+  const upright = byText['https://highbridge.example/doc/P1-R0'];
   const turned = byText['PT-C128-P1-R270'];
   assert.equal(upright.format, 'qrCode');
   assert.equal(upright.rotation, 0);
@@ -122,18 +122,18 @@ test('e2e: barcode scan returns rotated codes from the mock barcode sheet', { sk
   );
 });
 
-test('e2e: formats other than png are rejected', { skip: !DLL && 'set PAPERTRAIL_DEVHOST_DLL' }, async () => {
-  const client = new PapertrailClient({ port: PORT, fetch: withOrigin(ORIGIN), origin: ORIGIN, storage: null });
+test('e2e: formats other than png are rejected', { skip: !DLL && 'set HIGHBRIDGE_DEVHOST_DLL' }, async () => {
+  const client = new HighbridgeClient({ port: PORT, fetch: withOrigin(ORIGIN), origin: ORIGIN, storage: null });
   await client.connect({ launch: false });
   await assert.rejects(client._json('POST', '/v1/scans', { format: 'pdf' }), (err) => err.code === 'invalid_options');
 });
 
-test('e2e: another origin cannot collect the result', { skip: !DLL && 'set PAPERTRAIL_DEVHOST_DLL' }, async () => {
-  const owner = new PapertrailClient({ port: PORT, fetch: withOrigin(ORIGIN), origin: ORIGIN, storage: null });
+test('e2e: another origin cannot collect the result', { skip: !DLL && 'set HIGHBRIDGE_DEVHOST_DLL' }, async () => {
+  const owner = new HighbridgeClient({ port: PORT, fetch: withOrigin(ORIGIN), origin: ORIGIN, storage: null });
   await owner.connect({ launch: false });
   const job = await owner._json('POST', '/v1/scans', { source: 'flatbed' });
 
-  const thief = new PapertrailClient({ port: PORT, fetch: withOrigin('https://evil.example'), origin: 'https://evil.example', storage: null });
+  const thief = new HighbridgeClient({ port: PORT, fetch: withOrigin('https://evil.example'), origin: 'https://evil.example', storage: null });
   await thief.pair(); // dev host auto-approves pairing; ownership must still hold
-  await assert.rejects(thief._json('GET', `/v1/scans/${job.id}`), (err) => err instanceof PapertrailError && err.code === 'not_found');
+  await assert.rejects(thief._json('GET', `/v1/scans/${job.id}`), (err) => err instanceof HighbridgeError && err.code === 'not_found');
 });

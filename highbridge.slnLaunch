@@ -1,0 +1,32 @@
+[
+  {
+    "Name": "Demo: dev host + sample site",
+    "Projects": [
+      {
+        "Path": "src\\Highbridge.DevHost\\Highbridge.DevHost.csproj",
+        "Action": "Start",
+        "DebugTarget": "DevHost"
+      },
+      {
+        "Path": "samples\\Highbridge.SampleSite\\Highbridge.SampleSite.csproj",
+        "Action": "Start",
+        "DebugTarget": "SampleSite"
+      }
+    ]
+  },
+  {
+    "Name": "Demo: tray app (mock scanner) + sample site",
+    "Projects": [
+      {
+        "Path": "src\\Highbridge.App\\Highbridge.App.csproj",
+        "Action": "Start",
+        "DebugTarget": "Tray app (mock scanner)"
+      },
+      {
+        "Path": "samples\\Highbridge.SampleSite\\Highbridge.SampleSite.csproj",
+        "Action": "Start",
+        "DebugTarget": "SampleSite"
+      }
+    ]
+  }
+]

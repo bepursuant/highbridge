@@ -1,5 +1,5 @@
 /*
- * A fake TWAIN 1.9 data source for testing papertrail under Wine. It behaves like the
+ * A fake TWAIN 1.9 data source for testing highbridge under Wine. It behaves like the
  * troublesome real-world cases, Windows' WIA-TWAIN layer (wiatwain.ds) and COM-based vendor
  * drivers:
  *
@@ -129,9 +129,9 @@ static void fill_identity(TW_IDENTITY *id)
     id->ProtocolMajor = 1;
     id->ProtocolMinor = 9;
     id->SupportedGroups = DG_CONTROL | DG_IMAGE;
-    strcpy(id->Manufacturer, "papertrail test");
+    strcpy(id->Manufacturer, "highbridge test");
     strcpy(id->ProductFamily, "WIA test");
-    strcpy(id->ProductName, "WIA-papertrail test scanner");
+    strcpy(id->ProductName, "WIA-highbridge test scanner");
 }
 
 static int width_px(void) { return g_dpi * 2; }
@@ -404,7 +404,7 @@ __declspec(dllexport) TW_UINT16 WINAPI DS_Entry(TW_IDENTITY *origin, TW_UINT32 d
             g_pixelType = 2;
             g_dpi = 150;
             g_xferCount = -1;
-            g_message = RegisterWindowMessageA("papertrail fake TWAIN source");
+            g_message = RegisterWindowMessageA("highbridge fake TWAIN source");
             g_openThread = GetCurrentThreadId();
             g_open = TRUE;
             fill_identity(data);

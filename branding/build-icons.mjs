@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Renders logo.svg / logo-16.svg with headless Chrome and writes papertrail.ico (16, 20, 24, 32,
+// Renders logo.svg / logo-16.svg with headless Chrome and writes highbridge.ico (16, 20, 24, 32,
 // 40, 48, 64 and 256 px) plus the sample page's copy of the logo. No npm dependencies.
 //
 //   node branding/build-icons.mjs [--png <dir>]     (CHROME=/path/to/chrome to pick a browser)
@@ -26,16 +26,16 @@ const sources = {
 };
 
 const frames = await renderWithChrome(sizes.map((size) => ({ size, svg: fromSmallGrid.has(size) ? sources.small : sources.large })));
-writeFileSync(join(here, 'papertrail.ico'), buildIco(frames));
+writeFileSync(join(here, 'highbridge.ico'), buildIco(frames));
 copyFileSync(join(here, 'logo.svg'), join(root, 'docs', 'logo.svg'));
 if (pngDir) {
   mkdirSync(pngDir, { recursive: true });
-  for (const f of frames) writeFileSync(join(pngDir, `papertrail-${f.size}.png`), encodePng(f));
+  for (const f of frames) writeFileSync(join(pngDir, `highbridge-${f.size}.png`), encodePng(f));
 }
-console.log(`Wrote branding/papertrail.ico (${frames.map((f) => f.size).join(', ')} px) and docs/logo.svg`);
+console.log(`Wrote branding/highbridge.ico (${frames.map((f) => f.size).join(', ')} px) and docs/logo.svg`);
 
 async function renderWithChrome(jobs) {
-  const work = mkdtempSync(join(tmpdir(), 'papertrail-icons-'));
+  const work = mkdtempSync(join(tmpdir(), 'highbridge-icons-'));
   try {
     const page = join(work, 'render.html');
     const items = jobs.map(({ size, svg }) => ({

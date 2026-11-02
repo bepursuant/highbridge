@@ -2,10 +2,10 @@
 <!--
   Installer screens, authored here instead of using the WiX UI extension so the MSI contains no
   WiX code or custom-action DLLs. Full UI only; silent (/qn) and basic (/qb) installs skip all of
-  this and rely on the launch condition in Papertrail.wxs.
+  this and rely on the launch condition in Highbridge.wxs.
 
   Flow: runtime check (only if a runtime is missing) > license > progress > finished.
-  Running the MSI again when papertrail is installed offers Repair; uninstalling is done from
+  Running the MSI again when highbridge is installed offers Repair; uninstalling is done from
   Settings > Apps (msiexec /x), which runs this UI with REMOVE=ALL.
 
   The license text is License.rtf next to this file.
@@ -24,7 +24,7 @@
     <CustomAction Id="PT_Relaunch" Directory="SystemFolder" Execute="immediate" Return="asyncNoWait"
         ExeCommand="&quot;[SystemFolder]msiexec.exe&quot; /i &quot;[OriginalDatabase]&quot; AUTOSTART=[AUTOSTART] LAUNCHAPP=[LAUNCHAPP]" />
 
-    <UI Id="PapertrailUI">
+    <UI Id="HighbridgeUI">
       <TextStyle Id="PT_Normal" FaceName="Segoe UI" Size="9" />
       <TextStyle Id="PT_Bold" FaceName="Segoe UI" Size="9" Bold="yes" />
       <TextStyle Id="PT_Title" FaceName="Segoe UI" Size="12" Bold="yes" />
@@ -34,7 +34,7 @@
       <Dialog Id="PT_RuntimeDlg" Width="370" Height="270" Title="[ProductName] Setup">
         <Control Id="Title" Type="Text" X="15" Y="10" Width="340" Height="20" Transparent="yes" NoPrefix="yes" Text="{\PT_Title}Install Microsoft .NET first" />
         <Control Id="Intro" Type="Text" X="15" Y="36" Width="340" Height="30" NoPrefix="yes"
-            Text="papertrail needs these free Microsoft components. Install each one marked Missing. Get the 32-bit (x86) versions shown here, even on 64-bit Windows: the buttons download exactly those." />
+            Text="highbridge needs these free Microsoft components. Install each one marked Missing. Get the 32-bit (x86) versions shown here, even on 64-bit Windows: the buttons download exactly those." />
 
         <Control Id="DesktopName" Type="Text" X="15" Y="78" Width="190" Height="15" NoPrefix="yes" Text="{\PT_Bold}.NET Desktop Runtime 10 (x86)" />
         <Control Id="DesktopMissing" Type="Text" X="210" Y="78" Width="55" Height="15" NoPrefix="yes" Text="Missing" HideCondition="DESKTOPRUNTIME" ShowCondition="NOT DESKTOPRUNTIME" />
@@ -52,7 +52,7 @@
 
         <Control Id="Step1" Type="Text" X="15" Y="132" Width="340" Height="15" NoPrefix="yes" Text="1.  Click Download. Your browser saves Microsoft's installer." />
         <Control Id="Step2" Type="Text" X="15" Y="150" Width="340" Height="28" NoPrefix="yes" Text="2.  Open the downloaded file and click Install. Windows may ask for administrator permission; if you don't have it, ask your IT team to install it." />
-        <Control Id="Step3" Type="Text" X="15" Y="182" Width="340" Height="28" NoPrefix="yes" Text="3.  Click Check again. This window reopens and continues with the papertrail installation once everything is installed." />
+        <Control Id="Step3" Type="Text" X="15" Y="182" Width="340" Height="28" NoPrefix="yes" Text="3.  Click Check again. This window reopens and continues with the highbridge installation once everything is installed." />
 
         <Control Id="Line" Type="Line" X="0" Y="234" Width="370" Height="0" />
         <Control Id="CheckAgain" Type="PushButton" X="214" Y="243" Width="78" Height="17" Default="yes" Text="&amp;Check again">
@@ -89,8 +89,8 @@
           <Publish Event="Reinstall" Value="ALL" />
           <Publish Event="EndDialog" Value="Return" />
         </Control>
-        <Control Id="RepairText" Type="Text" X="105" Y="52" Width="250" Height="28" NoPrefix="yes" Text="Puts back missing files, the papertrail:// link handler and the Start menu shortcut." />
-        <Control Id="RemoveText" Type="Text" X="15" Y="92" Width="340" Height="28" NoPrefix="yes" Text="To uninstall papertrail, open Settings &gt; Apps &gt; Installed apps, find papertrail and choose Uninstall. Your list of approved websites is kept." />
+        <Control Id="RepairText" Type="Text" X="105" Y="52" Width="250" Height="28" NoPrefix="yes" Text="Puts back missing files, the highbridge:// link handler and the Start menu shortcut." />
+        <Control Id="RemoveText" Type="Text" X="15" Y="92" Width="340" Height="28" NoPrefix="yes" Text="To uninstall highbridge, open Settings &gt; Apps &gt; Installed apps, find highbridge and choose Uninstall. Your list of approved websites is kept." />
         <Control Id="Line" Type="Line" X="0" Y="234" Width="370" Height="0" />
         <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel">
           <Publish Event="EndDialog" Value="Exit" />
@@ -118,7 +118,7 @@
         <Control Id="InstalledTitle" Type="Text" X="15" Y="10" Width="340" Height="20" Transparent="yes" NoPrefix="yes" Text="{\PT_Title}[ProductName] is installed"
             HideCondition="REMOVE ~= &quot;ALL&quot;" ShowCondition="NOT (REMOVE ~= &quot;ALL&quot;)" />
         <Control Id="InstalledText" Type="Text" X="15" Y="40" Width="340" Height="45" NoPrefix="yes"
-            Text="papertrail runs in the notification area (bottom right of the screen) and starts when you sign in. Each website asks you once before it can use your scanner."
+            Text="highbridge runs in the notification area (bottom right of the screen) and starts when you sign in. Each website asks you once before it can use your scanner."
             HideCondition="REMOVE ~= &quot;ALL&quot;" ShowCondition="NOT (REMOVE ~= &quot;ALL&quot;)" />
         <Control Id="RemovedTitle" Type="Text" X="15" Y="10" Width="340" Height="20" Transparent="yes" NoPrefix="yes" Text="{\PT_Title}[ProductName] has been removed" Hidden="yes"
             ShowCondition="REMOVE ~= &quot;ALL&quot;" />
@@ -139,7 +139,7 @@
 
       <Dialog Id="PT_FatalErrorDlg" Width="370" Height="270" Title="[ProductName] Setup">
         <Control Id="Title" Type="Text" X="15" Y="10" Width="340" Height="20" Transparent="yes" NoPrefix="yes" Text="{\PT_Title}Setup failed" />
-        <Control Id="Text" Type="Text" X="15" Y="40" Width="340" Height="45" NoPrefix="yes" Text="papertrail could not be installed and nothing was changed. Try again, or send your IT team the log made by: msiexec /i papertrail.msi /l*v papertrail-setup.log" />
+        <Control Id="Text" Type="Text" X="15" Y="40" Width="340" Height="45" NoPrefix="yes" Text="highbridge could not be installed and nothing was changed. Try again, or send your IT team the log made by: msiexec /i highbridge.msi /l*v highbridge-setup.log" />
         <Control Id="Line" Type="Line" X="0" Y="234" Width="370" Height="0" />
         <Control Id="Finish" Type="PushButton" X="304" Y="243" Width="56" Height="17" Default="yes" Cancel="yes" Text="&amp;Close">
           <Publish Event="EndDialog" Value="Exit" />
@@ -147,7 +147,7 @@
       </Dialog>
 
       <Dialog Id="PT_CancelDlg" Width="260" Height="85" Title="[ProductName] Setup" NoMinimize="yes">
-        <Control Id="Text" Type="Text" X="15" Y="15" Width="230" Height="30" NoPrefix="yes" Text="Cancel the papertrail installation?" />
+        <Control Id="Text" Type="Text" X="15" Y="15" Width="230" Height="30" NoPrefix="yes" Text="Cancel the highbridge installation?" />
         <Control Id="Yes" Type="PushButton" X="132" Y="57" Width="56" Height="17" Text="&amp;Yes">
           <Publish Event="EndDialog" Value="Exit" />
         </Control>

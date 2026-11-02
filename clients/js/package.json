@@ -1,13 +1,13 @@
 {
-  "name": "@papertrail/client",
+  "name": "@highbridge/client",
   "version": "0.1.0",
-  "description": "Browser client for the papertrail local scanning bridge",
+  "description": "Browser client for the highbridge local scanning bridge",
   "type": "module",
-  "main": "papertrail.js",
-  "types": "papertrail.d.ts",
+  "main": "highbridge.js",
+  "types": "highbridge.d.ts",
   "files": [
-    "papertrail.js",
-    "papertrail.d.ts"
+    "highbridge.js",
+    "highbridge.d.ts"
   ],
   "scripts": {
     "test": "node --test \"test/*.test.mjs\""

@@ -27,8 +27,8 @@ fi
 cp "$work/sane.ds" "$twain_dir/sane.ds"
 
 echo "== Building the probe and the app"
-dotnet publish tests/twain-wine/Probe/Papertrail.TwainProbe.csproj -c Release -o "$work/probe" -nologo -v quiet
-dotnet publish src/Papertrail.App/Papertrail.App.csproj -c Release -o "$work/app" -nologo -v quiet
+dotnet publish tests/twain-wine/Probe/Highbridge.TwainProbe.csproj -c Release -o "$work/probe" -nologo -v quiet
+dotnet publish src/Highbridge.App/Highbridge.App.csproj -c Release -o "$work/app" -nologo -v quiet
 
 winpath() { echo "Z:${1//\//\\}"; }
 failures=0
@@ -44,7 +44,7 @@ probe() {
   mkdir -p "$dir"
   echo "== $name"
   (cd "$work/probe" && env -u DOTNET_ROOT "${env[@]}" FAKE_TWAIN_LOG="$(winpath "$dir/fake.log")" \
-    timeout 180 wine Papertrail.TwainProbe.exe "--out=$(winpath "$dir")" "$@" >"$dir/out.log" 2>&1) || true
+    timeout 180 wine Highbridge.TwainProbe.exe "--out=$(winpath "$dir")" "$@" >"$dir/out.log" 2>&1) || true
   local result
   result="$(grep '^RESULT' "$dir/out.log" | tail -1 | tr -d '\r')"
   echo "   $result"
@@ -117,10 +117,10 @@ grep -q "ICapXResolution" "$work/diagnose/out.log" || fail "diagnose: capabiliti
 
 echo "== app --diagnose-scanner --quiet"
 local_app_data="$(cd "$work/app" && env -u DOTNET_ROOT wine cmd /c echo %LOCALAPPDATA% 2>/dev/null | tr -d '\r')"
-logs="$(env -u DOTNET_ROOT wine winepath -u "$local_app_data\\Papertrail\\logs" 2>/dev/null | tr -d '\r')"
+logs="$(env -u DOTNET_ROOT wine winepath -u "$local_app_data\\Highbridge\\logs" 2>/dev/null | tr -d '\r')"
 rm -f "$logs/scanner-diagnostics.txt"
-if (cd "$work/app" && env -u DOTNET_ROOT timeout 180 wine Papertrail.exe --diagnose-scanner --quiet); then
-  if grep -q "WIA-papertrail test scanner" "$logs/scanner-diagnostics.txt" 2>/dev/null; then
+if (cd "$work/app" && env -u DOTNET_ROOT timeout 180 wine Highbridge.exe --diagnose-scanner --quiet); then
+  if grep -q "WIA-highbridge test scanner" "$logs/scanner-diagnostics.txt" 2>/dev/null; then
     echo "   wrote $logs/scanner-diagnostics.txt"
   else
     fail "app: $logs/scanner-diagnostics.txt missing or incomplete"

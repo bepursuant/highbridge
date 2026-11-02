@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>Highbridge.App</RootNamespace>
+    <AssemblyName>Highbridge</AssemblyName>
+    <!-- File description in Explorer and Task Manager, and the app name browsers show in their
+         "Open ...?" prompt for highbridge:// links. It defaults to the assembly name. -->
+    <AssemblyTitle>highbridge</AssemblyTitle>
+    <ApplicationIcon>..\..\branding\highbridge.ico</ApplicationIcon>
+    <UseWindowsForms>true</UseWindowsForms>
+    <UseWPF>true</UseWPF>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <!-- 32-bit only: a process only sees TWAIN drivers of its own bitness, and 32-bit drivers are the common case. -->
+    <RuntimeIdentifier>win-x86</RuntimeIdentifier>
+    <!-- `dotnet publish` makes one framework-dependent Highbridge.exe. It needs the x86 .NET Desktop
+         Runtime and ASP.NET Core Runtime 10; the MSI checks for both. -->
+    <SelfContained>false</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\branding\highbridge.ico" LogicalName="highbridge.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Highbridge.Core\Highbridge.Core.csproj" />
+    <ProjectReference Include="..\Highbridge.Server\Highbridge.Server.csproj" />
+    <ProjectReference Include="..\Highbridge.Twain\Highbridge.Twain.csproj" />
+  </ItemGroup>
+
+</Project>

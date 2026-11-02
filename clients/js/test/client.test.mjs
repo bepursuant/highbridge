@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PapertrailClient, PapertrailError, barcodePointsOnImage, buildScanUrl } from '../papertrail.js';
+import { HighbridgeClient, HighbridgeError, barcodePointsOnImage, buildScanUrl } from '../highbridge.js';
 
 const ORIGIN = 'https://app.example.com';
 
-/** In-memory stand-in for the papertrail API. */
+/** In-memory stand-in for the highbridge API. */
 class FakeApp {
   constructor({ running = true, paired = false, reapprove = false } = {}) {
     this.running = running;
@@ -24,7 +24,7 @@ class FakeApp {
     if (!this.running) throw new TypeError('Failed to fetch');
 
     const json = (status, body) => new Response(body === null ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
-    if (method === 'GET' && pathname === '/v1/status') return json(200, { app: 'papertrail', version: '0.1.0', apiVersion: 1, backend: 'mock', paired: this.paired, pairingAllowed: true });
+    if (method === 'GET' && pathname === '/v1/status') return json(200, { app: 'highbridge', version: '0.1.0', apiVersion: 1, backend: 'mock', paired: this.paired, pairingAllowed: true });
     if (method === 'POST' && pathname === '/v1/pair') { this.paired = true; this.reapprove = false; return json(200, { paired: true }); }
     if (!this.paired) return json(403, { error: 'origin_not_paired', message: 'Pair first.' });
     if (method === 'GET' && pathname === '/v1/scanners') return json(200, { scanners: [{ id: 'mock-feeder', name: 'Mock', backend: 'mock', isDefault: true }] });
@@ -83,13 +83,13 @@ function memoryStorage() {
 }
 
 function client(app, extra = {}) {
-  return new PapertrailClient({ fetch: app.fetch, origin: ORIGIN, pollIntervalMs: 1, launchTimeoutMs: 50, storage: memoryStorage(), ...extra });
+  return new HighbridgeClient({ fetch: app.fetch, origin: ORIGIN, pollIntervalMs: 1, launchTimeoutMs: 50, storage: memoryStorage(), ...extra });
 }
 
 test('buildScanUrl encodes origin, request id and options', () => {
   const url = buildScanUrl(ORIGIN, 'abc123abc123abc123', { dpi: 300, colorMode: 'gray', duplex: true, scannerId: 'A & B', format: 'png' });
   const parsed = new URL(url);
-  assert.equal(parsed.protocol, 'papertrail:');
+  assert.equal(parsed.protocol, 'highbridge:');
   assert.equal(parsed.searchParams.get('origin'), ORIGIN);
   assert.equal(parsed.searchParams.get('request'), 'abc123abc123abc123');
   assert.equal(parsed.searchParams.get('scannerId'), 'A & B');
@@ -137,13 +137,13 @@ test('failed scans reject with the server error code', async () => {
     return inner(url, init);
   })(app.fetch);
 
-  await assert.rejects(client(app).scan(), (err) => err instanceof PapertrailError && err.code === 'paper_jam');
+  await assert.rejects(client(app).scan(), (err) => err instanceof HighbridgeError && err.code === 'paper_jam');
 });
 
-test('when the app is not running and the site was paired before, scan launches papertrail://scan', async () => {
+test('when the app is not running and the site was paired before, scan launches highbridge://scan', async () => {
   const app = new FakeApp({ running: false, paired: true });
   const storage = memoryStorage();
-  storage.setItem('papertrail.paired', 'http://127.0.0.1:47115');
+  storage.setItem('highbridge.paired', 'http://127.0.0.1:47116');
   const launched = [];
   const c = client(app, {
     storage,
@@ -172,7 +172,7 @@ test('when the app is not running and the site was never paired, scan launches t
 
   const result = await c.scan();
 
-  assert.deepEqual(launched, ['papertrail://launch']);
+  assert.deepEqual(launched, ['highbridge://launch']);
   assert.ok(app.calls.includes('POST /v1/pair'));
   assert.equal(result.pages.length, 1);
 });
@@ -184,16 +184,16 @@ test('reports not_running when the app never comes up', async () => {
 
 test('offers the one-time installer when a download URL is configured and the app never starts', async () => {
   const app = new FakeApp({ running: false });
-  const installerUrl = 'https://github.com/bepursuant/papertrail/releases/latest/download/papertrail-x86.msi';
+  const installerUrl = 'https://github.com/bepursuant/highbridge/releases/latest/download/highbridge-x86.msi';
   const launched = [];
   await assert.rejects(
     client(app, { launch: (url) => launched.push(url), installerUrl }).scan(),
-    (err) => err instanceof PapertrailError
+    (err) => err instanceof HighbridgeError
       && err.code === 'setup_required'
       && err.message === 'Please complete this one-time setup.'
       && err.details.installerUrl === installerUrl,
   );
-  assert.deepEqual(launched, ['papertrail://launch']);
+  assert.deepEqual(launched, ['highbridge://launch']);
 });
 
 test('retries without targetAddressSpace when the browser rejects the value', async () => {

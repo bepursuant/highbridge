@@ -1,9 +1,9 @@
 using System.Globalization;
 using Microsoft.Extensions.Logging;
-using Papertrail.Scanning;
-using Papertrail.Twain;
+using Highbridge.Scanning;
+using Highbridge.Twain;
 
-// Usage: Papertrail.TwainProbe [--diagnose] [--color=bw|gray|color] [--dpi=N] [--source=auto|flatbed|feeder]
+// Usage: Highbridge.TwainProbe [--diagnose] [--color=bw|gray|color] [--dpi=N] [--source=auto|flatbed|feeder]
 //        [--max-pages=N] [--idle-timeout=SECONDS] [--out=DIR]
 // Prints "RESULT ok pages=N" or "RESULT error code=..." as its last line.
 var settings = args.Select(a => a.Split('=', 2)).ToDictionary(p => p[0], p => p.Length > 1 ? p[1] : string.Empty, StringComparer.OrdinalIgnoreCase);
