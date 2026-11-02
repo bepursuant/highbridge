@@ -17,13 +17,15 @@ public sealed class BarcodeWorker : IDisposable
 
     private readonly Channel<Item> _queue = Channel.CreateUnbounded<Item>(new UnboundedChannelOptions { SingleWriter = false });
     private readonly ILogger _logger;
+    private readonly ThreadPriority _priority;
     private readonly object _startLock = new();
     private bool _started;
 
-    public BarcodeWorker(int? parallelism = null, TimeSpan? pageBudget = null, ILogger<BarcodeWorker>? logger = null)
+    public BarcodeWorker(int? parallelism = null, TimeSpan? pageBudget = null, ILogger<BarcodeWorker>? logger = null, ThreadPriority? priority = null)
     {
         Parallelism = parallelism ?? Math.Clamp(Environment.ProcessorCount / 2, 1, 2);
         PageBudget = pageBudget ?? DefaultPageBudget;
+        _priority = priority ?? ThreadPriority.BelowNormal;
         _logger = logger ?? NullLogger<BarcodeWorker>.Instance;
     }
 
@@ -58,7 +60,7 @@ public sealed class BarcodeWorker : IDisposable
             _started = true;
             for (int i = 0; i < Parallelism; i++)
             {
-                new Thread(Run) { IsBackground = true, Priority = ThreadPriority.BelowNormal, Name = $"highbridge-barcodes-{i + 1}" }.Start();
+                new Thread(Run) { IsBackground = true, Priority = _priority, Name = $"highbridge-barcodes-{i + 1}" }.Start();
             }
         }
     }

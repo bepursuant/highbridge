@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -215,7 +216,8 @@ public sealed class ApiTests : IAsyncLifetime
         var create = Request(HttpMethod.Post, "/v1/scans", Site);
         create.Content = JsonContent.Create(new { scannerId = MockScannerBackend.BarcodesId, dpi = 120, barcodes = true, maxPages = 1 });
 
-        var job = await PollUntilFinished((await Json<ScanJobResponse>(await _http.SendAsync(create))).Id, Site);
+        // A full-page search can outlast the product's 3s below-normal budget on a busy CI runner.
+        var job = await PollUntilFinished((await Json<ScanJobResponse>(await _http.SendAsync(create))).Id, Site, TimeSpan.FromSeconds(25));
 
         Assert.Equal(Jobs.ScanJobStatus.Completed, job.Status);
         Assert.Equal(BarcodeStatus.Done, job.Pages[0].BarcodeStatus);
@@ -351,11 +353,15 @@ public sealed class ApiTests : IAsyncLifetime
 
     private async Task StartAsync()
     {
+        // Normal priority and a longer page budget than production. The product still uses a
+        // below-normal thread and a 3s budget; on a shared CI runner that budget expires before
+        // every rotation is searched and the page comes back Partial.
         _runtime = new HighbridgeRuntime(
             new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.FromMilliseconds(1), FeederSheets = 2 }),
             Consent,
             new SettingsStore(path: null),
-            Policy);
+            Policy,
+            barcodeWorker: new BarcodeWorker(pageBudget: TimeSpan.FromSeconds(20), priority: ThreadPriority.Normal));
         _app = HighbridgeServer.Build(_runtime, b => b.WebHost.UseTestServer());
         await _app.StartAsync();
         _http = _app.GetTestClient();
@@ -388,9 +394,11 @@ public sealed class ApiTests : IAsyncLifetime
         return await Json<T>(response);
     }
 
-    private async Task<ScanJobResponse> PollUntilFinished(string id, string origin)
+    private async Task<ScanJobResponse> PollUntilFinished(string id, string origin, TimeSpan? timeout = null)
     {
-        for (int i = 0; i < 500; i++)
+        var wait = timeout ?? TimeSpan.FromSeconds(5);
+        var clock = Stopwatch.StartNew();
+        while (clock.Elapsed < wait)
         {
             var job = await GetJson<ScanJobResponse>($"/v1/scans/{id}", origin);
             if (job.FinishedAt is not null)

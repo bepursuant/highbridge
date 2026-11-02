@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Highbridge.Barcodes;
 using Highbridge.Configuration;
 using Highbridge.Consent;
 using Highbridge.Jobs;
@@ -28,7 +29,8 @@ public sealed class HighbridgeRuntime : IDisposable
         TimeProvider? time = null,
         ILoggerFactory? loggerFactory = null,
         int port = FixedPort,
-        ProvenanceIdentity? identity = null)
+        ProvenanceIdentity? identity = null,
+        BarcodeWorker? barcodeWorker = null)
     {
         loggerFactory ??= NullLoggerFactory.Instance;
         Backend = backend;
@@ -42,7 +44,8 @@ public sealed class HighbridgeRuntime : IDisposable
             Origins,
             time,
             logger: loggerFactory.CreateLogger<ScanJobManager>(),
-            provenance: new ProvenanceStamping(policy.ProvenanceStamp, identity));
+            provenance: new ProvenanceStamping(policy.ProvenanceStamp, identity),
+            barcodeWorker: barcodeWorker);
         Logger = loggerFactory.CreateLogger<HighbridgeRuntime>();
     }
 
