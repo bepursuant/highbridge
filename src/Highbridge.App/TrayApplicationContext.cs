@@ -2,9 +2,11 @@ using System.Diagnostics;
 using System.IO;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Logging;
+using Highbridge.Cards;
 using Highbridge.Configuration;
 using Highbridge.Hosting;
 using Highbridge.Jobs;
+using Highbridge.Pcsc;
 using Highbridge.Scanning;
 using Highbridge.Server;
 using Highbridge.Twain;
@@ -40,6 +42,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
         IScannerBackend backend = options.UseMockScanner
             ? new MockScannerBackend()
             : new TwainScannerBackend(_loggerFactory.CreateLogger<TwainScannerBackend>());
+        ICardReaderBackend cardReader = options.UseMockScanner
+            ? new MockCardReaderBackend()
+            : new PcscCardReaderBackend(_loggerFactory.CreateLogger<PcscCardReaderBackend>());
         if (!options.UseMockScanner)
         {
             _logger.LogInformation("{Environment}", TwainScannerBackend.DescribeEnvironment());
@@ -47,6 +52,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         _runtime = new HighbridgeRuntime(
             backend,
+            cardReader,
             new DialogConsentService(_ui),
             new SettingsStore(HighbridgePaths.UserSettingsFile),
             HighbridgePolicy.Load(HighbridgePaths.MachinePolicyFile),
@@ -99,6 +105,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
             _runtime.Dispose();
             (_runtime.Backend as IDisposable)?.Dispose();
+            (_runtime.CardReader as IDisposable)?.Dispose();
             _loggerFactory.Dispose();
         }
 
@@ -108,8 +115,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private ContextMenuStrip BuildMenu()
     {
         var menu = new ContextMenuStrip();
-        string backend = _options.UseMockScanner ? "mock scanner" : "TWAIN";
-        menu.Items.Add(new ToolStripMenuItem($"highbridge {HighbridgeServer.AppVersion} - 127.0.0.1:{_runtime.Port} ({backend})") { Enabled = false });
+        string scanners = _options.UseMockScanner ? "mock scanner" : "TWAIN";
+        string readers = _options.UseMockScanner ? "mock card reader" : "PC/SC";
+        menu.Items.Add(new ToolStripMenuItem($"highbridge {HighbridgeServer.AppVersion} - 127.0.0.1:{_runtime.Port} ({scanners}, {readers})") { Enabled = false });
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Approved websites...", null, (_, _) => ShowApprovedSites());
 
@@ -166,7 +174,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _logger.LogInformation("Listening on http://127.0.0.1:{Port}", _runtime.Port);
             if (!_options.Background && _options.Urls.Count == 0)
             {
-                Notify("highbridge is running", "Websites you approve can now scan documents.", ToolTipIcon.Info);
+                Notify("highbridge is running", "Websites you approve can now scan documents and read cards.", ToolTipIcon.Info);
             }
         }
         catch (IOException ex)
@@ -196,11 +204,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
             switch (result.Outcome)
             {
                 case ProtocolOutcome.OriginNotPaired:
-                    Notify("Scan request blocked", "A website asked to scan but is not approved. Open the site and use its Scan button to approve it first.", ToolTipIcon.Warning);
+                    Notify("Request blocked", "A website asked to use a scanner or card reader but is not approved. Open the site and use its button to approve it first.", ToolTipIcon.Warning);
                     break;
                 case ProtocolOutcome.Invalid:
                 case ProtocolOutcome.Rejected:
-                    Notify("Scan request ignored", result.Detail ?? "The highbridge link was not valid.", ToolTipIcon.Warning);
+                    Notify("Request ignored", result.Detail ?? "The highbridge link was not valid.", ToolTipIcon.Warning);
                     break;
             }
         }

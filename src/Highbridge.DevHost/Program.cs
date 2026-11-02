@@ -1,6 +1,7 @@
 using System.Globalization;
 using Microsoft.Extensions.Logging;
 using Highbridge;
+using Highbridge.Cards;
 using Highbridge.Configuration;
 using Highbridge.Consent;
 using Highbridge.Hosting;
@@ -66,7 +67,7 @@ for (int i = 0; i < args.Length; i++)
             return 0;
         case "-h" or "--help":
             Console.WriteLine("""
-                highbridge dev host (mock scanner)
+                highbridge dev host (mock scanner and mock card reader)
 
                   --port <n>             API port (default 47116; the real app always uses 47116)
                   --consent allow|deny   auto-answer pairing prompts (default allow)
@@ -100,6 +101,7 @@ var settings = new SettingsStore(settingsPath);
 var consent = new LoggingConsent(new FixedConsentService(allow), logger);
 using var runtime = new HighbridgeRuntime(
     new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.FromMilliseconds(pageDelayMs) }),
+    new MockCardReaderBackend(),
     consent,
     settings,
     policy,
@@ -107,6 +109,7 @@ using var runtime = new HighbridgeRuntime(
     port: port);
 
 runtime.Jobs.JobFinished += job => logger.LogInformation("Scan {Id} for {Origin}: {Status} ({Pages} pages)", job.Id, job.Origin, job.Status, job.Pages.Count);
+runtime.CardReads.JobFinished += job => logger.LogInformation("Card read {Id} for {Origin}: {Status} {Code}", job.Id, job.Origin, job.Status, job.ErrorCode);
 
 var app = HighbridgeServer.Build(runtime, b =>
 {
@@ -133,7 +136,7 @@ foreach (string url in urls)
     logger.LogInformation("highbridge URL -> {Outcome} {Detail}", result.Outcome, result.Detail);
 }
 
-logger.LogInformation("highbridge dev host (mock scanner) listening on http://127.0.0.1:{Port}; consent={Consent}", port, allow ? "allow" : "deny");
+logger.LogInformation("highbridge dev host (mock scanner and mock card reader) listening on http://127.0.0.1:{Port}; consent={Consent}", port, allow ? "allow" : "deny");
 await app.RunAsync();
 return 0;
 

@@ -32,6 +32,7 @@
     <ProjectReference Include="..\Highbridge.Core\Highbridge.Core.csproj" />
     <ProjectReference Include="..\Highbridge.Server\Highbridge.Server.csproj" />
     <ProjectReference Include="..\Highbridge.Twain\Highbridge.Twain.csproj" />
+    <ProjectReference Include="..\Highbridge.Pcsc\Highbridge.Pcsc.csproj" />
   </ItemGroup>
 
 </Project>

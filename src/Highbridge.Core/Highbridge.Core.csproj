@@ -7,11 +7,13 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Great.EmvTags" />
     <PackageReference Include="ZXing.Net" />
   </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="Highbridge.Core.Tests" />
+    <InternalsVisibleTo Include="Highbridge.Pcsc" />
   </ItemGroup>
 
 </Project>

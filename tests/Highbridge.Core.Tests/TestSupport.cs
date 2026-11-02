@@ -1,3 +1,4 @@
+using Highbridge.Cards;
 using Highbridge.Configuration;
 using Highbridge.Consent;
 using Highbridge.Scanning;
@@ -24,9 +25,11 @@ internal static class TestRuntime
         IConsentService? consent = null,
         HighbridgePolicy? policy = null,
         TimeProvider? time = null,
-        IScannerBackend? backend = null) =>
+        IScannerBackend? backend = null,
+        ICardReaderBackend? cardReader = null) =>
         new(
             backend ?? FastMock(),
+            cardReader ?? new MockCardReaderBackend(),
             consent ?? new FixedConsentService(allow: true),
             new SettingsStore(path: null),
             policy ?? new HighbridgePolicy(),

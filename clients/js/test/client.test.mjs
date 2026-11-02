@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { HighbridgeClient, HighbridgeError, barcodePointsOnImage, buildScanUrl } from '../highbridge.js';
+import { HighbridgeClient, HighbridgeError, barcodePointsOnImage, buildReadCardUrl, buildScanUrl } from '../highbridge.js';
 
 const ORIGIN = 'https://app.example.com';
 
@@ -11,6 +11,7 @@ class FakeApp {
     this.paired = paired;
     this.reapprove = reapprove;
     this.jobs = new Map();
+    this.cardJobs = new Map();
     this.calls = [];
     this.deleted = [];
   }
@@ -32,6 +33,20 @@ class FakeApp {
       return json(403, { error: 'approval_required', message: 'Approve this site again.' });
     }
     if (method === 'POST' && pathname === '/v1/scans') return json(202, this.addJob('job123456789abcdef', JSON.parse(init.body ?? '{}')));
+    if (method === 'POST' && pathname === '/v1/card-reads' && this.reapprove) {
+      return json(403, { error: 'approval_required', message: 'Approve this site again.' });
+    }
+    if (method === 'POST' && pathname === '/v1/card-reads') return json(202, this.addCard(JSON.parse(init.body ?? '{}').requestId ?? 'card123456789abcdef', JSON.parse(init.body ?? '{}')));
+
+    const cardMatch = pathname.match(/^\/v1\/card-reads\/([^/]+)$/);
+    if (cardMatch) {
+      const card = this.cardJobs.get(cardMatch[1]);
+      if (!card) return json(404, { error: 'not_found', message: 'No such card read.' });
+      if (method === 'DELETE') { this.deleted.push(card.id); return json(204, null); }
+      card.polls += 1;
+      if (card.polls >= 2) card.status = 'completed';
+      return json(200, this.cardView(card));
+    }
 
     const match = pathname.match(/^\/v1\/scans\/([^/]+)(?:\/pages\/(\d+))?$/);
     const job = match && this.jobs.get(match[1]);
@@ -42,6 +57,27 @@ class FakeApp {
     if (job.polls >= 2) job.status = job.outcome;
     return json(200, this.view(job));
   };
+
+  addCard(id, options) {
+    const job = { id, options, polls: 0, status: 'queued' };
+    this.cardJobs.set(id, job);
+    return this.cardView(job);
+  }
+
+  cardView(job) {
+    const done = job.status === 'completed';
+    return {
+      id: job.id,
+      status: job.status,
+      reader: done ? { id: 'mock-reader', name: 'Mock' } : undefined,
+      interface: done ? 'contact' : undefined,
+      applications: done ? [{ aid: 'A0000000031010', label: 'VISA CREDIT', preferredName: 'Visa', priority: 1 }] : undefined,
+      selected: done ? {
+        aid: 'A0000000031010', label: 'VISA CREDIT', preferredName: 'Visa', priority: 1,
+        panLast4: '1234', expiry: '2028-12', cardholderName: 'DOE/JOHN',
+      } : undefined,
+    };
+  }
 
   addJob(id, options, outcome = 'completed') {
     const job = { id, options, polls: 0, status: 'queued', outcome };
@@ -228,6 +264,48 @@ test('buildScanUrl carries only the stamp position', () => {
   assert.equal(new URL(buildScanUrl(ORIGIN, 'abc123abc123abc123', { stamp: { position: 'top' } })).searchParams.get('stamp'), 'top');
   assert.equal(new URL(buildScanUrl(ORIGIN, 'abc123abc123abc123', { stamp: {} })).searchParams.get('stamp'), 'bottom');
   assert.equal(new URL(buildScanUrl(ORIGIN, 'abc123abc123abc123', { stamp: null })).searchParams.has('stamp'), false);
+});
+
+test('readCard returns the allowlisted fields and re-approves an old approval once', async () => {
+  const app = new FakeApp({ paired: true, reapprove: true });
+  const result = await client(app).readCard({ interface: 'contact', waitForCardMs: 1000 });
+  assert.deepEqual(app.calls.filter((c) => c.startsWith('POST')), ['POST /v1/card-reads', 'POST /v1/pair', 'POST /v1/card-reads']);
+  assert.equal(result.selected.panLast4, '1234');
+  assert.equal(result.selected.expiry, '2028-12');
+  assert.equal(result.interface, 'contact');
+  assert.equal(app.deleted[0], result.id);
+});
+
+test('when the app is not running and the site was paired before, readCard launches highbridge://read-card', async () => {
+  const app = new FakeApp({ running: false, paired: true });
+  const storage = memoryStorage();
+  storage.setItem('highbridge.paired', 'http://127.0.0.1:47116');
+  const launched = [];
+  const c = client(app, {
+    storage,
+    launch: (url) => {
+      launched.push(url);
+      const request = new URL(url).searchParams.get('request');
+      setTimeout(() => { app.running = true; app.addCard(request, {}); }, 5);
+    },
+  });
+
+  const result = await c.readCard({ aid: 'A0000000031010' });
+  const url = new URL(launched[0]);
+  assert.equal(url.host, 'read-card');
+  assert.equal(url.searchParams.get('aid'), 'A0000000031010');
+  assert.equal(result.selected.cardholderName, 'DOE/JOHN');
+});
+
+test('buildReadCardUrl carries the card options and nothing else', () => {
+  const url = new URL(buildReadCardUrl(ORIGIN, 'abc123abc123abc123', { readerId: 'A & B', interface: 'contactless', aid: 'A0000000031010', waitForCardMs: 5000 }));
+  assert.equal(url.protocol, 'highbridge:');
+  assert.equal(url.host, 'read-card');
+  assert.equal(url.searchParams.get('readerId'), 'A & B');
+  assert.equal(url.searchParams.get('interface'), 'contactless');
+  assert.equal(url.searchParams.get('aid'), 'A0000000031010');
+  assert.equal(url.searchParams.get('waitForCardMs'), '5000');
+  assert.equal(url.searchParams.get('apdu'), null);
 });
 
 test('stamped scan returns provenance and re-approves an old approval once', async () => {

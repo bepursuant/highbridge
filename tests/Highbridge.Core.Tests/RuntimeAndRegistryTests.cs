@@ -1,3 +1,4 @@
+using Highbridge.Cards;
 using Highbridge.Configuration;
 using Highbridge.Consent;
 using Highbridge.Hosting;
@@ -113,6 +114,7 @@ public class RuntimeAndRegistryTests
 
             using var runtime = new HighbridgeRuntime(
                 TestRuntime.FastMock(),
+                new MockCardReaderBackend(),
                 new FixedConsentService(allow: false),
                 new SettingsStore(settingsPath),
                 HighbridgePolicy.Load(policyPath));

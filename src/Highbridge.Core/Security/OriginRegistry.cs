@@ -12,10 +12,11 @@ public sealed class OriginRegistry
     public static readonly TimeSpan PairingPromptTimeout = TimeSpan.FromMinutes(2);
 
     /// <summary>
-    /// The approval wording shown now. Version 2 added: stamped scans send the Windows user name
-    /// and computer name to the site.
+    /// The approval wording shown now. Version 2 added the stamp identity sentence. Version 3 adds
+    /// card reads: the last four digits of the card number, the expiry, and the cardholder name
+    /// leave the machine.
     /// </summary>
-    public const int CurrentApprovalVersion = 2;
+    public const int CurrentApprovalVersion = 3;
 
     private readonly SettingsStore _settings;
     private readonly HighbridgePolicy _policy;

@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using Highbridge.Barcodes;
+using Highbridge.Cards;
 using Highbridge.Provenance;
 using Highbridge.Scanning;
 
@@ -13,13 +14,22 @@ public enum ProtocolAction
 
     /// <summary>highbridge://scan?... - start a scan for an already-paired origin.</summary>
     Scan,
+
+    /// <summary>highbridge://read-card?... - start a card read for an already-paired origin.</summary>
+    ReadCard,
 }
 
-public sealed record ProtocolCommand(ProtocolAction Action, string? Origin, string? RequestId, ScanOptions Options);
+public sealed record ProtocolCommand(
+    ProtocolAction Action,
+    string? Origin,
+    string? RequestId,
+    ScanOptions Options,
+    CardReadOptions? CardRead = null);
 
 /// <summary>
 /// Parses and builds <c>highbridge://</c> URLs. Query parameter names match the JSON body of
-/// <c>POST /v1/scans</c>, plus <c>v</c> (protocol version), <c>origin</c> and <c>request</c>.
+/// <c>POST /v1/scans</c> or <c>POST /v1/card-reads</c>, plus <c>v</c> (protocol version),
+/// <c>origin</c> and <c>request</c>.
 /// </summary>
 public static class HighbridgeUri
 {
@@ -71,6 +81,9 @@ public static class HighbridgeUri
             case "scan":
                 action = ProtocolAction.Scan;
                 break;
+            case "read-card":
+                action = ProtocolAction.ReadCard;
+                break;
             default:
                 error = $"unknown action '{actionPart}'";
                 return false;
@@ -91,14 +104,25 @@ public static class HighbridgeUri
 
         if (!parameters.TryGetValue("origin", out string? origin) || string.IsNullOrEmpty(origin))
         {
-            error = "scan URL is missing 'origin'";
+            error = action == ProtocolAction.ReadCard ? "read-card URL is missing 'origin'" : "scan URL is missing 'origin'";
             return false;
         }
 
         if (!parameters.TryGetValue("request", out string? requestId) || string.IsNullOrEmpty(requestId))
         {
-            error = "scan URL is missing 'request'";
+            error = action == ProtocolAction.ReadCard ? "read-card URL is missing 'request'" : "scan URL is missing 'request'";
             return false;
+        }
+
+        if (action == ProtocolAction.ReadCard)
+        {
+            if (!TryReadCard(parameters, out var cardRead, out error))
+            {
+                return false;
+            }
+
+            command = new ProtocolCommand(action, origin, requestId, new ScanOptions(), cardRead);
+            return true;
         }
 
         if (!TryReadOptions(parameters, out var options, out error))
@@ -153,6 +177,96 @@ public static class HighbridgeUri
         }
 
         return sb.ToString();
+    }
+
+    public static string BuildReadCard(string origin, string requestId, CardReadOptions options)
+    {
+        var sb = new StringBuilder($"{Scheme}://read-card?v={Version}");
+        Append(sb, "origin", origin);
+        Append(sb, "request", requestId);
+        if (!string.IsNullOrEmpty(options.ReaderId))
+        {
+            Append(sb, "readerId", options.ReaderId);
+        }
+
+        if (options.Interface != CardInterface.Auto)
+        {
+            Append(sb, "interface", ToCamel(options.Interface.ToString()));
+        }
+
+        if (options.NormalizedAid is { } aid)
+        {
+            Append(sb, "aid", aid);
+        }
+
+        if (options.WaitForCardMs != CardReadOptions.DefaultWaitForCardMs)
+        {
+            Append(sb, "waitForCardMs", options.WaitForCardMs.ToString(CultureInfo.InvariantCulture));
+        }
+
+        return sb.ToString();
+    }
+
+    private static bool TryReadCard(Dictionary<string, string> p, out CardReadOptions options, out string? error)
+    {
+        options = new CardReadOptions();
+        error = null;
+        foreach (string blocked in new[] { "apdu", "cla", "ins", "data" })
+        {
+            if (p.ContainsKey(blocked))
+            {
+                error = $"unknown option '{blocked}'";
+                return false;
+            }
+        }
+
+        if (p.TryGetValue("readerId", out string? readerId) && readerId.Length > 0)
+        {
+            options = options with { ReaderId = readerId };
+        }
+
+        if (p.TryGetValue("interface", out string? iface))
+        {
+            CardInterface? parsed = iface.ToLowerInvariant() switch
+            {
+                "auto" => CardInterface.Auto,
+                "contact" => CardInterface.Contact,
+                "contactless" => CardInterface.Contactless,
+                _ => null,
+            };
+            if (parsed is null)
+            {
+                error = $"unknown interface '{iface}'";
+                return false;
+            }
+
+            options = options with { Interface = parsed.Value };
+        }
+
+        if (p.TryGetValue("aid", out string? aid) && aid.Length > 0)
+        {
+            options = options with { Aid = aid };
+        }
+
+        if (p.TryGetValue("waitForCardMs", out string? wait))
+        {
+            if (!int.TryParse(wait, NumberStyles.None, CultureInfo.InvariantCulture, out int value))
+            {
+                error = "waitForCardMs must be a whole number";
+                return false;
+            }
+
+            options = options with { WaitForCardMs = value };
+        }
+
+        var problems = options.Validate();
+        if (problems.Count > 0)
+        {
+            error = string.Join(" ", problems);
+            return false;
+        }
+
+        return true;
     }
 
     private static bool TryReadOptions(Dictionary<string, string> p, out ScanOptions options, out string? error)

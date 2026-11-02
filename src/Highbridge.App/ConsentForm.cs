@@ -74,9 +74,10 @@ internal sealed class ConsentForm : Form
     public bool Approved { get; private set; }
 
     public static ConsentForm ForPairing(PairingRequest request) => new(
-        "Allow this website to use your scanners?",
+        "Allow this website to use your scanners and card reader?",
         request.Origin,
-        "The site will be able to list your scanners and scan documents whenever it asks, without asking you again. "
+        "The site will be able to list your scanners and scan documents, and to read cards, whenever it asks, without asking you again. "
+            + "A card read sends the last four digits of the card number, the expiry, and the cardholder name. "
             + "Scans it asks to stamp will include your Windows user name and computer name. "
             + "Only allow sites you trust. You can remove the site later from \"Approved websites\" in the highbridge tray menu.",
         "Allow",

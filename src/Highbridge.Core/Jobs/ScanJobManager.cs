@@ -1,6 +1,4 @@
 using System.Collections.Concurrent;
-using System.Security.Cryptography;
-using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Highbridge.Barcodes;
@@ -25,12 +23,12 @@ public sealed class JobRejectedException : Exception
 /// Owns scan jobs: running one scan at a time, keeping results in memory until they expire, and
 /// releasing them only to the origin that owns the job. Scans from paired origins never prompt.
 /// </summary>
-public sealed partial class ScanJobManager : IDisposable
+public sealed class ScanJobManager : IDisposable
 {
-    public static readonly TimeSpan DefaultRetention = TimeSpan.FromMinutes(10);
+    public static readonly TimeSpan DefaultRetention = DeviceJobRules.DefaultRetention;
 
     /// <summary>A highbridge:// scan that its origin does not claim within this time never starts.</summary>
-    public static readonly TimeSpan DefaultClaimTimeout = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan DefaultClaimTimeout = DeviceJobRules.DefaultClaimTimeout;
 
     /// <summary>
     /// Backstop for a backend that never returns. The TWAIN backend has its own, shorter
@@ -43,7 +41,6 @@ public sealed partial class ScanJobManager : IDisposable
     /// (earlier pages are analysed while later ones are scanned). Pages not done by then are "skipped".
     /// </summary>
     public static readonly TimeSpan BarcodeWaitAfterScan = TimeSpan.FromSeconds(30);
-    private const int MaxJobs = 32;
 
     private readonly IScannerBackend _backend;
     private readonly OriginRegistry _origins;
@@ -84,9 +81,9 @@ public sealed partial class ScanJobManager : IDisposable
     /// <summary>Raised (on a worker thread) whenever a job reaches a terminal state.</summary>
     public event Action<ScanJob>? JobFinished;
 
-    public static bool IsValidRequestId(string? id) => id is not null && RequestIdPattern().IsMatch(id);
+    public static bool IsValidRequestId(string? id) => DeviceJobRules.IsValidRequestId(id);
 
-    public static string NewId() => Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
+    public static string NewId() => DeviceJobRules.NewId();
 
     /// <summary>Queues a scan. The caller must already have verified that <paramref name="origin"/> is paired.</summary>
     public ScanJob Start(string origin, ScanOptions options, ScanTrigger trigger, string? requestedId = null)
@@ -103,7 +100,7 @@ public sealed partial class ScanJobManager : IDisposable
         }
 
         PurgeExpired();
-        if (_jobs.Count >= MaxJobs)
+        if (_jobs.Count >= DeviceJobRules.MaxJobs)
         {
             throw new JobRejectedException("too_many_jobs", "Too many scans are pending. Delete finished scans and retry.");
         }
@@ -320,7 +317,4 @@ public sealed partial class ScanJobManager : IDisposable
             JobFinished?.Invoke(job);
         }
     }
-
-    [GeneratedRegex("^[A-Za-z0-9_-]{16,64}$")]
-    private static partial Regex RequestIdPattern();
 }

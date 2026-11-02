@@ -6,6 +6,7 @@
     <Project Path="src/Highbridge.App/Highbridge.App.csproj" />
     <Project Path="src/Highbridge.Core/Highbridge.Core.csproj" />
     <Project Path="src/Highbridge.DevHost/Highbridge.DevHost.csproj" />
+    <Project Path="src/Highbridge.Pcsc/Highbridge.Pcsc.csproj" />
     <Project Path="src/Highbridge.Server/Highbridge.Server.csproj" />
     <Project Path="src/Highbridge.Twain/Highbridge.Twain.csproj" />
   </Folder>

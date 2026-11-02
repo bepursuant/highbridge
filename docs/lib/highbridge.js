@@ -7,9 +7,9 @@
 //     for (const page of pages) show(URL.createObjectURL(page.blob));
 //   };
 //
-// Call scan()/connect() from a click handler: browsers require a user gesture for the
-// loopback-network permission prompt and for opening highbridge:// links. After the one-time
-// site approval, scans run without any highbridge prompt.
+// Call scan(), readCard() and connect() from a click handler: browsers require a user gesture
+// for the loopback-network permission prompt and for opening highbridge:// links. After the
+// one-time site approval, scans and card reads run without any highbridge prompt.
 
 /** highbridge always listens on this port. Override it only to test against a dev host. */
 export const DEFAULT_PORT = 47116;
@@ -169,6 +169,74 @@ export class HighbridgeClient {
     return result;
   }
 
+  /** @returns {Promise<Array<{id: string, name: string, backend: string}>>} */
+  async listCardReaders() {
+    await this.connect();
+    try {
+      return (await this._json('GET', '/v1/card-readers')).readers;
+    } catch (err) {
+      if (err.code !== 'approval_required') throw err;
+      await this.pair();
+      return (await this._json('GET', '/v1/card-readers')).readers;
+    }
+  }
+
+  /**
+   * Reads one card. The result is the last four digits, expiry, and cardholder name of one
+   * application — never the full number, a track, or an APDU.
+   * @param {object} [options]
+   * @param {string} [options.readerId]
+   * @param {'auto'|'contact'|'contactless'} [options.interface]
+   * @param {string} [options.aid] hex AID; default is the highest priority that selects
+   * @param {number} [options.waitForCardMs] 0–120000, default 30000
+   * @param {object} [hooks]
+   * @param {(job: object) => void} [hooks.onProgress]
+   * @param {AbortSignal} [hooks.signal]
+   */
+  async readCard(options = {}, { onProgress, signal } = {}) {
+    let job;
+    const status = await this.status();
+
+    if (status) {
+      if (!status.paired) await this.pair();
+      job = await this._startCardRead(options);
+    } else if (this._wasPaired() && this.origin) {
+      const requestId = randomId();
+      this._launch(buildReadCardUrl(this.origin, requestId, options));
+      job = await this._waitForProtocolCardRead(requestId, options, signal);
+    } else {
+      await this.connect();
+      job = await this._startCardRead(options);
+    }
+
+    onProgress?.(job);
+    const waitMs = Number(options.waitForCardMs);
+    const timeout = Math.max(this.scanTimeoutMs, (Number.isFinite(waitMs) ? waitMs : 30000) + 15000);
+    job = await this._waitFor(
+      async () => {
+        const next = await this._json('GET', `/v1/card-reads/${job.id}`);
+        onProgress?.(next);
+        return next;
+      },
+      (j) => TERMINAL.has(j.status),
+      timeout,
+      signal,
+    );
+
+    if (job.status !== 'completed') {
+      throw new HighbridgeError(job.error?.error ?? job.status, job.error?.message ?? `The card read was ${job.status}.`, job);
+    }
+
+    this._json('DELETE', `/v1/card-reads/${job.id}`).catch(() => {});
+    return {
+      id: job.id,
+      reader: job.reader,
+      interface: job.interface,
+      applications: job.applications,
+      selected: job.selected,
+    };
+  }
+
   async _startScan(options) {
     try {
       return await this._json('POST', '/v1/scans', options);
@@ -178,6 +246,44 @@ export class HighbridgeClient {
       if (err.code !== 'approval_required') throw err;
       await this.pair();
       return this._json('POST', '/v1/scans', options);
+    }
+  }
+
+  async _startCardRead(options) {
+    try {
+      return await this._json('POST', '/v1/card-reads', options);
+    } catch (err) {
+      // A card read sends the last four, the expiry, and the cardholder name. Sites approved
+      // before highbridge said so are asked once more.
+      if (err.code !== 'approval_required') throw err;
+      await this.pair();
+      return this._json('POST', '/v1/card-reads', options);
+    }
+  }
+
+  async _waitForProtocolCardRead(requestId, options, signal) {
+    try {
+      return await this._waitFor(
+        async () => {
+          try {
+            return await this._json('GET', `/v1/card-reads/${requestId}`);
+          } catch (err) {
+            if (err.code === 'unreachable' || err.code === 'not_found') return null;
+            throw err;
+          }
+        },
+        (job) => job !== null,
+        this.launchTimeoutMs,
+        signal,
+      );
+    } catch (err) {
+      if (err.code === 'origin_not_paired') {
+        this._rememberPaired(false);
+        await this.pair();
+        return this._startCardRead(options);
+      }
+      if (err.code === 'timeout') throw await this._unreachableError();
+      throw err;
     }
   }
 
@@ -303,6 +409,15 @@ export function buildScanUrl(origin, requestId, options = {}) {
   if (options.barcodes) params.set('barcodes', 'true');
   if (Array.isArray(options.barcodeFormats)) params.set('barcodeFormats', options.barcodeFormats.join(','));
   return `highbridge://scan?${params}`;
+}
+
+/** Builds a highbridge://read-card URL. Parameter names match the POST /v1/card-reads body. */
+export function buildReadCardUrl(origin, requestId, options = {}) {
+  const params = new URLSearchParams({ v: '1', origin, request: requestId });
+  for (const key of ['readerId', 'interface', 'aid', 'waitForCardMs']) {
+    if (options[key] !== undefined && options[key] !== null && options[key] !== '') params.set(key, String(options[key]));
+  }
+  return `highbridge://read-card?${params}`;
 }
 
 /**

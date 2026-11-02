@@ -1,15 +1,27 @@
 using Highbridge.Barcodes;
+using Highbridge.Cards;
 using Highbridge.Jobs;
 using Highbridge.Provenance;
 using Highbridge.Scanning;
 
 namespace Highbridge.Server;
 
-public sealed record StatusResponse(string App, string Version, int ApiVersion, string Backend, bool Paired, bool PairingAllowed);
+public sealed record DeviceStatus(string Kind, string Backend);
+
+public sealed record StatusResponse(
+    string App,
+    string Version,
+    int ApiVersion,
+    string Backend,
+    IReadOnlyList<DeviceStatus> Devices,
+    bool Paired,
+    bool PairingAllowed);
 
 public sealed record PairResponse(bool Paired);
 
 public sealed record ScannersResponse(IReadOnlyList<ScannerInfo> Scanners);
+
+public sealed record CardReadersResponse(IReadOnlyList<CardReaderInfo> Readers);
 
 public sealed record ErrorResponse(string Error, string Message);
 
@@ -63,4 +75,33 @@ public sealed record ScanJobResponse(
 
     private static PageResponse WithBarcodes(PageResponse page, JobBarcodes? barcodes) =>
         barcodes?.ForPage(page.Index) is { } found ? page with { BarcodeStatus = found.Status, Barcodes = found.Barcodes } : page;
+}
+
+public sealed record CardReadJobResponse(
+    string Id,
+    CardReadStatus Status,
+    CardReadTrigger Trigger,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? FinishedAt,
+    ErrorResponse? Error,
+    CardReaderRef? Reader,
+    CardInterface? Interface,
+    IReadOnlyList<CardApplication>? Applications,
+    CardSelection? Selected)
+{
+    public static CardReadJobResponse From(CardReadJob job)
+    {
+        var result = job.Result;
+        return new CardReadJobResponse(
+            job.Id,
+            job.Status,
+            job.Trigger,
+            job.CreatedAt,
+            job.FinishedAt,
+            job.ErrorCode is null ? null : new ErrorResponse(job.ErrorCode, job.ErrorMessage ?? job.ErrorCode),
+            result?.Reader,
+            result?.Interface,
+            result?.Applications,
+            result?.Selected);
+    }
 }
