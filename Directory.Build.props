@@ -10,7 +10,7 @@
     <DebugType>embedded</DebugType>
     <Version>0.1.0</Version>
     <Authors>Pursuant Solutions</Authors>
-    <Product>papertrail</Product>
+    <Product>highbridge</Product>
     <Copyright>Copyright (c) 2026 Pursuant Solutions</Copyright>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>

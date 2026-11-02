@@ -19,6 +19,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: papertrail-msi-unsigned
+          name: highbridge-msi-unsigned
           path: artifacts/msi/*.msi
           if-no-files-found: error

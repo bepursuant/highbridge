@@ -1,0 +1,17 @@
+<Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/Highbridge.SampleSite/Highbridge.SampleSite.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Highbridge.App/Highbridge.App.csproj" />
+    <Project Path="src/Highbridge.Core/Highbridge.Core.csproj" />
+    <Project Path="src/Highbridge.DevHost/Highbridge.DevHost.csproj" />
+    <Project Path="src/Highbridge.Server/Highbridge.Server.csproj" />
+    <Project Path="src/Highbridge.Twain/Highbridge.Twain.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Highbridge.Core.Tests/Highbridge.Core.Tests.csproj" />
+    <Project Path="tests/Highbridge.Server.Tests/Highbridge.Server.Tests.csproj" />
+    <Project Path="tests/twain-wine/Probe/Highbridge.TwainProbe.csproj" />
+  </Folder>
+</Solution>

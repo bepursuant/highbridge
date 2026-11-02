@@ -1,9 +1,9 @@
-import { PapertrailClient, PapertrailError, barcodePointsOnImage } from './lib/papertrail.js';
+import { HighbridgeClient, HighbridgeError, barcodePointsOnImage } from './lib/highbridge.js';
 import { installerUrl } from './config.js';
 
 const params = new URLSearchParams(location.search);
 const launchTimeoutMs = Number(params.get('launchTimeoutMs'));
-const client = new PapertrailClient({
+const client = new HighbridgeClient({
   port: Number(params.get('port')) || undefined,
   installerUrl,
   ...(launchTimeoutMs > 0 ? { launchTimeoutMs } : {}),
@@ -35,20 +35,20 @@ function setConnection(kind, text) {
 
 function showError(err) {
   errorBox.replaceChildren();
-  const message = err instanceof PapertrailError ? err.message : `Unexpected error: ${err?.message ?? err}`;
+  const message = err instanceof HighbridgeError ? err.message : `Unexpected error: ${err?.message ?? err}`;
   const text = document.createElement('p');
   text.textContent = message;
   errorBox.append(text);
-  if (err instanceof PapertrailError && err.code === 'setup_required' && err.details?.installerUrl) {
+  if (err instanceof HighbridgeError && err.code === 'setup_required' && err.details?.installerUrl) {
     const link = document.createElement('a');
     link.href = err.details.installerUrl;
     link.target = '_blank';
     link.rel = 'noopener';
-    link.textContent = 'Download the papertrail installer';
+    link.textContent = 'Download the highbridge installer';
     errorBox.append(link);
     const hint = document.createElement('p');
     hint.className = 'hint';
-    hint.textContent = 'If papertrail is already installed, start it from the Start menu and try again.';
+    hint.textContent = 'If highbridge is already installed, start it from the Start menu and try again.';
     errorBox.append(hint);
   }
   errorBox.hidden = false;
@@ -62,7 +62,7 @@ function clearError() {
 async function refreshStatus() {
   try {
     const status = await client.status();
-    if (!status) setConnection('off', 'papertrail not running');
+    if (!status) setConnection('off', 'highbridge not running');
     else if (!status.paired) setConnection('warn', `Connected (${status.backend}) · not approved`);
     else setConnection('ok', `Ready · ${status.backend} · v${status.version}`);
     return status;
@@ -97,7 +97,7 @@ function readOptions() {
   };
 }
 
-/** Shows what papertrail stamped on the page (values come from papertrail, not from this page). */
+/** Shows what highbridge stamped on the page (values come from highbridge, not from this page). */
 function provenanceList(p) {
   const list = document.createElement('dl');
   list.className = 'provenance';
@@ -238,7 +238,7 @@ form.addEventListener('submit', async (event) => {
   clearError();
   scanButton.disabled = true;
   scanButton.classList.add('busy');
-  progress.textContent = 'Contacting papertrail…';
+  progress.textContent = 'Contacting highbridge…';
   try {
     const result = await client.scan(readOptions(), {
       onProgress: (job) => {
@@ -279,7 +279,7 @@ clearButton.addEventListener('click', () => {
 // Don't trigger the browser's loopback permission prompt on page load; wait for a click.
 const permission = await client.loopbackPermission();
 if (permission === 'prompt') {
-  setConnection('unknown', 'Click Connect to link papertrail');
+  setConnection('unknown', 'Click Connect to link highbridge');
 } else if (permission === 'denied') {
   setConnection('off', 'Blocked by browser settings');
 } else {
