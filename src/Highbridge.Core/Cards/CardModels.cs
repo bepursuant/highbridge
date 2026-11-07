@@ -102,6 +102,9 @@ public sealed class CardReaderException : Exception
 
     public string Code { get; }
 
+    /// <summary>Windows PC/SC code, when this failure came from winscard. Never shown to the page.</summary>
+    internal uint? PcscCode { get; set; }
+
     public static CardReaderException NoReaders() => new("no_readers", "No card readers were found.");
 
     public static CardReaderException ReaderNotFound() => new("reader_not_found", "That card reader was not found.");

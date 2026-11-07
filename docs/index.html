@@ -125,7 +125,7 @@
           <span>Reader</span>
           <div class="row">
             <select id="reader" name="readerId" disabled>
-              <option value="">Default reader</option>
+              <option value="">Any slot</option>
             </select>
             <button type="button" id="card-connect" class="secondary">Connect</button>
           </div>
@@ -137,6 +137,7 @@
           <label><input type="radio" name="interface" value="contact" /><span>Contact</span></label>
           <label><input type="radio" name="interface" value="contactless" /><span>Contactless</span></label>
         </fieldset>
+        <p class="hint">Contact prefers the chip slot and asks for the contact directory (PSE) first. Contactless prefers the tap slot and asks for the contactless directory (PPSE) first. Auto uses whichever slot has a card. If that directory is not on the card, the other one is tried. Windows lists the two slots as two readers; a card in either slot of the same reader is accepted.</p>
 
         <label class="field">
           <span>Application (AID)</span>

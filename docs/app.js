@@ -330,7 +330,7 @@ function dash(value) {
 async function loadReaders() {
   const readers = await client.listCardReaders();
   const current = readerSelect.value;
-  readerSelect.replaceChildren(new Option('Default reader', ''));
+  readerSelect.replaceChildren(new Option('Any slot', ''));
   for (const reader of readers) {
     readerSelect.add(new Option(reader.name, reader.id));
   }

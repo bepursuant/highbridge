@@ -49,14 +49,29 @@ public sealed class PcscCardReaderBackend : ICardReaderBackend
         try
         {
             context = Winscard.Establish();
-            string reader = Resolve(Winscard.ListReaders(context), options);
+            IReadOnlyList<string> readers = Winscard.ListReaders(context);
+            IReadOnlyList<string>? watched = CardSlots.WatchList(readers, options.ReaderId);
+            if (watched is null)
+            {
+                throw CardReaderException.ReaderNotFound();
+            }
+
+            if (watched.Count == 0)
+            {
+                throw CardReaderException.NoReaders();
+            }
+
+            var (reader, atr) = Winscard.WaitForCard(context, watched, options.Interface, options.ReaderId, options.WaitForCardMs, cancellationToken);
             logged = reader;
-            byte[] atr = Winscard.WaitForCard(context, reader, options.WaitForCardMs, cancellationToken);
             var (connected, protocol) = Winscard.Connect(context, reader);
             card = connected;
-            Winscard.Begin(card);
-            transaction = true;
-            var result = Exchange(card, protocol, reader, atr, options);
+            transaction = Winscard.TryBegin(card);
+            if (!transaction)
+            {
+                _logger.LogWarning("Card read on {Reader} is continuing without an exclusive transaction", reader);
+            }
+
+            var result = Exchange(card, ref protocol, reader, atr, options);
             _logger.LogInformation(
                 "Card read on {Reader} via {Interface} selected {Aid}",
                 result.Reader.Name,
@@ -66,7 +81,7 @@ public sealed class PcscCardReaderBackend : ICardReaderBackend
         }
         catch (CardReaderException ex)
         {
-            _logger.LogWarning("Card read on {Reader} failed: {Code}", logged, ex.Code);
+            _logger.LogWarning("Card read on {Reader} failed: {Code} {Pcsc}", logged, ex.Code, ex.PcscCode is uint pcsc ? $"0x{pcsc:X8}" : "");
             throw;
         }
         catch (EmvFormatException)
@@ -86,32 +101,24 @@ public sealed class PcscCardReaderBackend : ICardReaderBackend
         }
     }
 
-    private static string Resolve(IReadOnlyList<string> names, CardReadOptions options)
+    private static CardReadResult Exchange(IntPtr card, ref uint protocol, string reader, byte[] atr, CardReadOptions options)
     {
-        if (names.Count == 0)
+        CardInterface mode = options.Interface;
+        if (mode == CardInterface.Auto
+            && !CardSlots.IsContactName(reader)
+            && !CardSlots.IsContactlessName(reader)
+            && !AtrSays(atr, "contactless")
+            && AtrSays(atr, "contact"))
         {
-            throw CardReaderException.NoReaders();
+            mode = CardInterface.Contact;
         }
 
-        if (string.IsNullOrWhiteSpace(options.ReaderId))
-        {
-            return names[0];
-        }
-
-        return names.FirstOrDefault(name => name.Equals(options.ReaderId, StringComparison.Ordinal))
-            ?? names.FirstOrDefault(name => name.Equals(options.ReaderId, StringComparison.OrdinalIgnoreCase))
-            ?? throw CardReaderException.ReaderNotFound();
-    }
-
-    private static CardReadResult Exchange(IntPtr card, uint protocol, string reader, byte[] atr, CardReadOptions options)
-    {
-        CardInterface? obvious = options.Interface == CardInterface.Auto ? Obvious(reader, atr) : null;
-        var attempts = Attempts(options.Interface, obvious);
+        var attempts = Directories(mode, reader);
         byte[]? directory = null;
         CardInterface used = attempts[0].Interface;
         foreach (var attempt in attempts)
         {
-            directory = TryDirectory(card, protocol, attempt.Name);
+            directory = TryDirectory(card, ref protocol, attempt.Name);
             if (directory is not null)
             {
                 used = attempt.Interface;
@@ -129,7 +136,7 @@ public sealed class PcscCardReaderBackend : ICardReaderBackend
         {
             for (int record = 1; record <= 16; record++)
             {
-                if (!TryResponse(card, protocol, Emv.ReadRecord(sfi, record), out var data, out ushort status))
+                if (!TryResponse(card, ref protocol, Emv.ReadRecord(sfi, record), out var data, out ushort status))
                 {
                     throw CardReaderException.ReadFailed();
                 }
@@ -159,9 +166,9 @@ public sealed class PcscCardReaderBackend : ICardReaderBackend
             throw CardReaderException.NoPaymentApps();
         }
 
-        var chosen = Choose(card, protocol, apps, options.NormalizedAid);
+        var chosen = Choose(card, ref protocol, apps, options.NormalizedAid);
         byte[] gpo = Emv.GetProcessingOptions(Emv.Pdol(chosen.Fci) ?? []);
-        if (!TryResponse(card, protocol, gpo, out byte[] gpoData, out ushort gpoStatus) || gpoStatus != 0x9000)
+        if (!TryResponse(card, ref protocol, gpo, out byte[] gpoData, out ushort gpoStatus) || gpoStatus != 0x9000)
         {
             throw CardReaderException.ReadFailed();
         }
@@ -176,7 +183,7 @@ public sealed class PcscCardReaderBackend : ICardReaderBackend
 
             for (int record = entry.First; record <= entry.Last; record++)
             {
-                if (!TryResponse(card, protocol, Emv.ReadRecord(entry.Sfi, record), out byte[] data, out ushort status) || status != 0x9000)
+                if (!TryResponse(card, ref protocol, Emv.ReadRecord(entry.Sfi, record), out byte[] data, out ushort status) || status != 0x9000)
                 {
                     throw CardReaderException.ReadFailed();
                 }
@@ -189,7 +196,7 @@ public sealed class PcscCardReaderBackend : ICardReaderBackend
         return new CardReadResult(new CardReaderRef(reader, reader), used, apps, selected);
     }
 
-    private static (CardApplication App, byte[] Fci) Choose(IntPtr card, uint protocol, List<CardApplication> apps, string? aid)
+    private static (CardApplication App, byte[] Fci) Choose(IntPtr card, ref uint protocol, List<CardApplication> apps, string? aid)
     {
         IEnumerable<CardApplication> order = apps
             .Select((app, index) => (app, index))
@@ -209,7 +216,7 @@ public sealed class PcscCardReaderBackend : ICardReaderBackend
 
         foreach (var app in order)
         {
-            if (!TryResponse(card, protocol, Emv.Select(Convert.FromHexString(app.Aid)), out byte[] data, out ushort status))
+            if (!TryResponse(card, ref protocol, Emv.Select(Convert.FromHexString(app.Aid)), out byte[] data, out ushort status))
             {
                 throw CardReaderException.ReadFailed();
             }
@@ -230,11 +237,19 @@ public sealed class PcscCardReaderBackend : ICardReaderBackend
         throw CardReaderException.AppNotFound();
     }
 
-    private static byte[]? TryDirectory(IntPtr card, uint protocol, byte[] name)
+    private static byte[]? TryDirectory(IntPtr card, ref uint protocol, byte[] name)
     {
-        if (!TryResponse(card, protocol, Emv.Select(name), out byte[] data, out ushort status))
+        byte[] command = Emv.Select(name);
+        if (!TryResponse(card, ref protocol, command, out byte[] data, out ushort status))
         {
             throw CardReaderException.ReadFailed();
+        }
+
+        // Some contactless cards reject the expected-length byte. Ask again without it.
+        if (status == 0x6700 && command.Length > 5 && TryResponse(card, ref protocol, command[..^1], out byte[] retry, out ushort retryStatus))
+        {
+            data = retry;
+            status = retryStatus;
         }
 
         if (status is 0x6A82 or 0x6A81 || status != 0x9000)
@@ -245,56 +260,21 @@ public sealed class PcscCardReaderBackend : ICardReaderBackend
         return Emv.DirectoryEntries(data).Count > 0 || Emv.DirectorySfi(data) is not null ? data : null;
     }
 
-    private static bool TryResponse(IntPtr card, uint protocol, byte[] command, out byte[] data, out ushort status)
+    private static bool TryResponse(IntPtr card, ref uint protocol, byte[] command, out byte[] data, out ushort status)
     {
-        byte[] response = Winscard.Transmit(card, protocol, command);
+        byte[] response = Winscard.Transmit(card, ref protocol, command);
         return Emv.TrySplit(response, out data, out status);
     }
 
-    private static List<(CardInterface Interface, byte[] Name)> Attempts(CardInterface requested, CardInterface? obvious)
+    private static List<(CardInterface Interface, byte[] Name)> Directories(CardInterface requested, string reader)
     {
-        if (requested == CardInterface.Contact || (requested == CardInterface.Auto && obvious == CardInterface.Contact))
-        {
-            return [(CardInterface.Contact, Emv.PseName)];
-        }
-
-        if (requested == CardInterface.Contactless || (requested == CardInterface.Auto && obvious == CardInterface.Contactless))
-        {
-            return [(CardInterface.Contactless, Emv.PpseName)];
-        }
-
-        return [(CardInterface.Contactless, Emv.PpseName), (CardInterface.Contact, Emv.PseName)];
+        (CardInterface Interface, byte[] Name) contact = (CardInterface.Contact, Emv.PseName);
+        (CardInterface Interface, byte[] Name) contactless = (CardInterface.Contactless, Emv.PpseName);
+        return CardSlots.DirectoryOrder(requested, reader)[0] == CardInterface.Contactless
+            ? [contactless, contact]
+            : [contact, contactless];
     }
 
-    private static CardInterface? Obvious(string reader, byte[] atr)
-    {
-        string name = reader.ToLowerInvariant();
-        if (name.Contains("contactless") || name.Contains("picc") || name.Contains("nfc"))
-        {
-            return CardInterface.Contactless;
-        }
-
-        if (name.Contains("contact") || name.Contains("icc"))
-        {
-            return CardInterface.Contact;
-        }
-
-        if (atr.Length == 0)
-        {
-            return null;
-        }
-
-        string text = Encoding.ASCII.GetString(atr);
-        if (text.Contains("contactless", StringComparison.OrdinalIgnoreCase))
-        {
-            return CardInterface.Contactless;
-        }
-
-        if (text.Contains("contact", StringComparison.OrdinalIgnoreCase))
-        {
-            return CardInterface.Contact;
-        }
-
-        return null;
-    }
+    private static bool AtrSays(byte[] atr, string word) =>
+        atr.Length > 0 && Encoding.ASCII.GetString(atr).Contains(word, StringComparison.OrdinalIgnoreCase);
 }

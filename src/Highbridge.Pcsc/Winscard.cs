@@ -17,14 +17,22 @@ internal static class Winscard
     private const uint ShareShared = 2;
     private const uint ProtocolT0 = 1;
     private const uint ProtocolT1 = 2;
+    private const uint ProtocolRaw = 0x10000;
     private const uint LeaveCard = 0;
+    private const uint StateChanged = 0x2;
     private const uint StateUnaware = 0;
+    private const uint StateUnavailable = 0x8;
     private const uint StateEmpty = 0x10;
     private const uint StatePresent = 0x20;
     private const uint StateMute = 0x200;
-    private const uint StateUnavailable = 0x8;
     private const uint NoReaders = 0x8010002E;
     private const uint Timeout = 0x8010000A;
+    private const uint ProtoMismatch = 0x8010000F;
+    private const uint InvalidParameter = 0x80100004;
+    private const uint SharingViolation = 0x8010000B;
+    private const uint ResetCard = 0x80100068;
+    private const uint RemovedCard = 0x80100069;
+    private const uint Unresponsive = 0x80100066;
 
     internal static IntPtr Establish()
     {
@@ -99,46 +107,94 @@ internal static class Winscard
         }
     }
 
-    /// <summary>Blocks until a card is present, <paramref name="waitMs"/> elapses, or the token fires.</summary>
-    internal static byte[] WaitForCard(IntPtr context, string reader, int waitMs, CancellationToken cancellationToken)
+    /// <summary>
+    /// Blocks until a card is present in one of <paramref name="readers"/>, <paramref name="waitMs"/>
+    /// elapses, or the token fires. Returns the reader that should be connected.
+    /// </summary>
+    internal static (string Reader, byte[] Atr) WaitForCard(
+        IntPtr context,
+        IReadOnlyList<string> readers,
+        CardInterface iface,
+        string? requestedId,
+        int waitMs,
+        CancellationToken cancellationToken)
     {
-        IntPtr name = Marshal.StringToHGlobalAnsi(reader);
+        if (readers.Count == 0)
+        {
+            throw CardReaderException.NoReaders();
+        }
+
+        var names = new IntPtr[readers.Count];
         try
         {
-            var states = new[]
+            var states = new ScardReaderState[readers.Count];
+            for (int i = 0; i < readers.Count; i++)
             {
-                new ScardReaderState
+                names[i] = Marshal.StringToHGlobalAnsi(readers[i]);
+                states[i] = new ScardReaderState
                 {
-                    Reader = name,
+                    Reader = names[i],
                     CurrentState = StateUnaware,
                     Atr = new byte[36],
-                },
-            };
-            Check(SCardGetStatusChange(context, 0, states, 1));
+                };
+            }
+
+            Check(SCardGetStatusChange(context, 0, states, (uint)states.Length));
             var clock = System.Diagnostics.Stopwatch.StartNew();
             var limit = TimeSpan.FromMilliseconds(Math.Max(0, waitMs));
-            while (!Present(states[0].EventState))
+            bool sawMute = false;
+            while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if ((states[0].EventState & StateMute) != 0)
+                var present = new List<string>();
+                int unavailable = 0;
+                for (int i = 0; i < states.Length; i++)
                 {
-                    throw CardReaderException.CardUnresponsive();
+                    uint state = states[i].EventState;
+                    if ((state & StateUnavailable) != 0)
+                    {
+                        unavailable++;
+                        continue;
+                    }
+
+                    if ((state & StateMute) != 0 && Present(state))
+                    {
+                        sawMute = true;
+                        continue;
+                    }
+
+                    if (Present(state))
+                    {
+                        present.Add(readers[i]);
+                    }
                 }
 
-                if ((states[0].EventState & StateUnavailable) != 0)
+                if (present.Count > 0)
+                {
+                    string chosen = CardSlots.ChoosePresent(present, iface, requestedId);
+                    int index = readers.ToList().FindIndex(name => name == chosen);
+                    return (chosen, CopyAtr(states[index]));
+                }
+
+                if (unavailable == states.Length)
                 {
                     throw CardReaderException.ReadFailed();
                 }
 
                 if (clock.Elapsed >= limit)
                 {
-                    throw CardReaderException.NoCard();
+                    throw sawMute ? CardReaderException.CardUnresponsive() : CardReaderException.NoCard();
                 }
 
-                states[0].CurrentState = states[0].EventState;
+                for (int i = 0; i < states.Length; i++)
+                {
+                    // CHANGED must not be fed back in. Contactless drivers treat it as a parameter error.
+                    states[i].CurrentState = states[i].EventState & ~StateChanged;
+                }
+
                 double remaining = (limit - clock.Elapsed).TotalMilliseconds;
                 uint slice = (uint)Math.Clamp((int)remaining, 1, 250);
-                int rc = SCardGetStatusChange(context, slice, states, 1);
+                int rc = SCardGetStatusChange(context, slice, states, (uint)states.Length);
                 if (Code(rc) == Timeout)
                 {
                     continue;
@@ -146,11 +202,6 @@ internal static class Winscard
 
                 Check(rc);
             }
-
-            int atrLength = (int)Math.Min(states[0].AtrLength, (uint)states[0].Atr.Length);
-            var atr = new byte[atrLength];
-            Array.Copy(states[0].Atr, atr, atrLength);
-            return atr;
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
         {
@@ -158,7 +209,13 @@ internal static class Winscard
         }
         finally
         {
-            Marshal.FreeHGlobal(name);
+            foreach (IntPtr name in names)
+            {
+                if (name != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(name);
+                }
+            }
         }
     }
 
@@ -166,19 +223,33 @@ internal static class Winscard
     {
         try
         {
-            int rc = SCardConnect(context, reader, ShareShared, ProtocolT0 | ProtocolT1, out IntPtr card, out uint protocol);
-            if (rc != 0)
+            // Contact is T=0. Contactless is usually T=1, and some drivers reject the combined request
+            // or only speak the raw protocol. Try the ordinary pair first, then each protocol alone.
+            uint[] attempts = [ProtocolT0 | ProtocolT1, ProtocolT1, ProtocolT0, ProtocolRaw];
+            int last = 0;
+            foreach (uint protocols in attempts)
             {
-                throw Map(rc);
+                int rc = SCardConnect(context, reader, ShareShared, protocols, out IntPtr card, out uint protocol);
+                if (rc == 0)
+                {
+                    if (protocol is ProtocolT0 or ProtocolT1 or ProtocolRaw)
+                    {
+                        return (card, protocol);
+                    }
+
+                    SCardDisconnect(card, LeaveCard);
+                    last = rc;
+                    continue;
+                }
+
+                last = rc;
+                if (!RetryableConnect(Code(rc)))
+                {
+                    throw Map(rc);
+                }
             }
 
-            if (protocol is not (ProtocolT0 or ProtocolT1))
-            {
-                SCardDisconnect(card, LeaveCard);
-                throw CardReaderException.ReadFailed();
-            }
-
-            return (card, protocol);
+            throw Map(last);
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
         {
@@ -186,11 +257,25 @@ internal static class Winscard
         }
     }
 
-    internal static void Begin(IntPtr card)
+    /// <summary>
+    /// Starts an exclusive transaction. Some contactless drivers refuse it; the read can still proceed.
+    /// </summary>
+    internal static bool TryBegin(IntPtr card)
     {
         try
         {
-            Check(SCardBeginTransaction(card));
+            int rc = SCardBeginTransaction(card);
+            if (rc == 0)
+            {
+                return true;
+            }
+
+            if (Code(rc) == SharingViolation)
+            {
+                return false;
+            }
+
+            throw Map(rc);
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
         {
@@ -224,13 +309,13 @@ internal static class Winscard
     }
 
     /// <summary>Sends one command and follows 61xx GET RESPONSE and 6Cxx length retries. Status word stays on the end.</summary>
-    internal static byte[] Transmit(IntPtr card, uint protocol, byte[] apdu)
+    internal static byte[] Transmit(IntPtr card, ref uint protocol, byte[] apdu)
     {
         byte[] command = apdu;
         var payload = new List<byte>();
         for (int hop = 0; hop < 8; hop++)
         {
-            byte[] raw = TransmitRaw(card, protocol, command);
+            byte[] raw = TransmitRaw(card, ref protocol, command);
             if (!Emv.TrySplit(raw, out byte[] body, out ushort status))
             {
                 throw CardReaderException.ReadFailed();
@@ -258,19 +343,54 @@ internal static class Winscard
         throw CardReaderException.ReadFailed();
     }
 
-    private static byte[] TransmitRaw(IntPtr card, uint protocol, byte[] apdu)
+    private static byte[] TransmitRaw(IntPtr card, ref uint protocol, byte[] apdu)
     {
-        int size = Marshal.SizeOf<ScardIoRequest>();
-        IntPtr pci = Marshal.AllocHGlobal(size);
+        int rc = TransmitOnce(card, protocol, apdu, out byte[] received);
+        if (rc == 0)
+        {
+            return received;
+        }
+
+        // Contactless readers often reset the card on the first command. The command was not
+        // accepted, so reconnect once and send it again.
+        if (Code(rc) is ResetCard or RemovedCard)
+        {
+            int again = SCardReconnect(card, ShareShared, ProtocolT0 | ProtocolT1 | ProtocolRaw, LeaveCard, out uint next);
+            if (again == 0 && next is ProtocolT0 or ProtocolT1 or ProtocolRaw)
+            {
+                protocol = next;
+                rc = TransmitOnce(card, protocol, apdu, out received);
+                if (rc == 0)
+                {
+                    return received;
+                }
+            }
+        }
+
+        throw Map(rc);
+    }
+
+    private static int TransmitOnce(IntPtr card, uint protocol, byte[] apdu, out byte[] received)
+    {
+        received = [];
+        IntPtr pci = ProtocolPci(protocol);
+        IntPtr owned = IntPtr.Zero;
         try
         {
-            Marshal.StructureToPtr(new ScardIoRequest { Protocol = protocol, PciLength = (uint)size }, pci, false);
+            if (pci == IntPtr.Zero)
+            {
+                int size = Marshal.SizeOf<ScardIoRequest>();
+                owned = Marshal.AllocHGlobal(size);
+                Marshal.StructureToPtr(new ScardIoRequest { Protocol = protocol, PciLength = (uint)size }, owned, false);
+                pci = owned;
+            }
+
             var recv = new byte[258];
             uint length = (uint)recv.Length;
             int rc = SCardTransmit(card, pci, apdu, (uint)apdu.Length, IntPtr.Zero, recv, ref length);
             if (rc != 0)
             {
-                throw Map(rc);
+                return rc;
             }
 
             if (length < 2 || length > recv.Length)
@@ -278,7 +398,8 @@ internal static class Winscard
                 throw CardReaderException.ReadFailed();
             }
 
-            return recv[..(int)length];
+            received = recv[..(int)length];
+            return 0;
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
         {
@@ -286,8 +407,32 @@ internal static class Winscard
         }
         finally
         {
-            Marshal.FreeHGlobal(pci);
+            if (owned != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(owned);
+            }
         }
+    }
+
+    /// <summary>
+    /// Contactless T=1 drivers reject a caller-built PCI and return a Windows SCard error.
+    /// The exported globals are the structures those drivers accept.
+    /// </summary>
+    private static IntPtr ProtocolPci(uint protocol)
+    {
+        string export = protocol switch
+        {
+            ProtocolT1 => "g_rgSCardT1Pci",
+            ProtocolRaw => "g_rgSCardRawPci",
+            _ => "g_rgSCardT0Pci",
+        };
+        IntPtr module = GetModuleHandle("winscard.dll");
+        if (module == IntPtr.Zero)
+        {
+            module = LoadLibrary("winscard.dll");
+        }
+
+        return module == IntPtr.Zero ? IntPtr.Zero : GetProcAddress(module, export);
     }
 
     private static void Check(int rc)
@@ -298,17 +443,43 @@ internal static class Winscard
         }
     }
 
-    private static CardReaderException Map(int rc) => Code(rc) switch
+    private static bool RetryableConnect(uint code) =>
+        code is ProtoMismatch or InvalidParameter or Unresponsive or 87;
+
+    private static byte[] CopyAtr(ScardReaderState state)
     {
-        NoReaders => CardReaderException.NoReaders(),
-        0x80100009 => CardReaderException.ReaderNotFound(),
-        0x8010000C => CardReaderException.NoCard(),
-        0x80100069 or 0x80100068 => CardReaderException.CardRemoved(),
-        0x80100066 or 0x80100067 => CardReaderException.CardUnresponsive(),
-        Timeout => new CardReaderException("read_timeout", "The card reader did not finish the read. Check the reader, then try again."),
-        0x8010001D or 0x8010001E => CardReaderException.PcscUnavailable(),
-        _ => CardReaderException.ReadFailed(),
-    };
+        if (state.Atr is not { Length: > 0 })
+        {
+            return [];
+        }
+
+        int atrLength = (int)Math.Min(state.AtrLength, (uint)state.Atr.Length);
+        if (atrLength <= 0)
+        {
+            return [];
+        }
+
+        var atr = new byte[atrLength];
+        Array.Copy(state.Atr, atr, atrLength);
+        return atr;
+    }
+
+    private static CardReaderException Map(int rc)
+    {
+        CardReaderException ex = Code(rc) switch
+        {
+            NoReaders => CardReaderException.NoReaders(),
+            0x80100009 => CardReaderException.ReaderNotFound(),
+            0x8010000C => CardReaderException.NoCard(),
+            RemovedCard or ResetCard or 0x8010002F => CardReaderException.CardRemoved(),
+            Unresponsive or 0x80100067 => CardReaderException.CardUnresponsive(),
+            Timeout => new CardReaderException("read_timeout", "The card reader did not finish the read. Check the reader, then try again."),
+            0x8010001D or 0x8010001E => CardReaderException.PcscUnavailable(),
+            _ => CardReaderException.ReadFailed(),
+        };
+        ex.PcscCode = Code(rc);
+        return ex;
+    }
 
     private static uint Code(int rc) => unchecked((uint)rc);
 
@@ -391,4 +562,16 @@ internal static class Winscard
         IntPtr recvPci,
         byte[] recvBuffer,
         ref uint recvLength);
+
+    [DllImport("winscard.dll", EntryPoint = "SCardReconnect")]
+    private static extern int SCardReconnect(IntPtr card, uint shareMode, uint protocols, uint initialization, out uint activeProtocol);
+
+    [DllImport("kernel32.dll", EntryPoint = "GetModuleHandleA", CharSet = CharSet.Ansi)]
+    private static extern IntPtr GetModuleHandle(string name);
+
+    [DllImport("kernel32.dll", EntryPoint = "LoadLibraryA", CharSet = CharSet.Ansi)]
+    private static extern IntPtr LoadLibrary(string name);
+
+    [DllImport("kernel32.dll", EntryPoint = "GetProcAddress", CharSet = CharSet.Ansi)]
+    private static extern IntPtr GetProcAddress(IntPtr module, string name);
 }
