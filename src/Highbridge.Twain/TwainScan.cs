@@ -169,9 +169,9 @@ internal sealed class TwainScan
             return;
         }
 
-        if (_options.MaxPages > 0 && _pages.Count >= _options.MaxPages)
+        if (_options.EffectivePageLimit() is int limit && _pages.Count >= limit)
         {
-            _logger.LogInformation("Reached {MaxPages} page(s); canceling the remaining transfers", _options.MaxPages);
+            _logger.LogInformation("Reached {Limit} page(s); canceling the remaining transfers", limit);
             e.CancelAll = true;
             return;
         }

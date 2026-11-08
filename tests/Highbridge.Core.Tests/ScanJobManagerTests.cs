@@ -197,6 +197,90 @@ public class ScanJobManagerTests
     }
 
     [Fact]
+    public async Task One_sheet_takes_the_front_and_back_and_leaves_the_rest_of_the_feeder()
+    {
+        var mock = new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.Zero, FeederSheets = 2 });
+        using var runtime = TestRuntime.Create(backend: mock);
+        runtime.Origins.Pair(Origin);
+
+        var whole = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true }, ScanTrigger.Api);
+        await whole.Finished.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(4, whole.Pages.Count);
+        Assert.Null(whole.UsedFeeder);
+
+        var first = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, OneSheet = true }, ScanTrigger.Api);
+        await first.Finished.WaitAsync(TimeSpan.FromSeconds(5));
+        var second = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, OneSheet = true }, ScanTrigger.Api);
+        await second.Finished.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(ScanJobStatus.Completed, first.Status);
+        Assert.Equal(2, first.Pages.Count);
+        Assert.True(first.UsedFeeder);
+        Assert.Equal(2, second.Pages.Count);
+
+        var waiting = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, OneSheet = true }, ScanTrigger.Api);
+        await Task.Delay(80);
+        Assert.False(waiting.IsFinished);
+        Assert.Equal(ScanJobStatus.Scanning, waiting.Status);
+
+        mock.LoadSheets(1);
+        await waiting.Finished.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(ScanJobStatus.Completed, waiting.Status);
+        Assert.Equal(2, waiting.Pages.Count);
+    }
+
+    [Fact]
+    public async Task An_empty_feeder_waits_instead_of_failing_a_one_sheet_scan()
+    {
+        var mock = new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.Zero, FeederSheets = 0 });
+        using var runtime = TestRuntime.Create(backend: mock);
+        runtime.Origins.Pair(Origin);
+
+        var job = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, OneSheet = true }, ScanTrigger.Api);
+        await Task.Delay(80);
+        Assert.Equal(ScanJobStatus.Scanning, job.Status);
+
+        mock.LoadSheets(1);
+        await job.Finished.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(ScanJobStatus.Completed, job.Status);
+        Assert.Equal(2, job.Pages.Count);
+    }
+
+    [Fact]
+    public async Task Cancelling_a_one_sheet_wait_ends_the_job()
+    {
+        var mock = new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.Zero, FeederSheets = 0 });
+        using var runtime = TestRuntime.Create(backend: mock);
+        runtime.Origins.Pair(Origin);
+
+        var job = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, OneSheet = true }, ScanTrigger.Api);
+        await Task.Delay(40);
+        Assert.True(runtime.Jobs.Delete(job.Id, Origin));
+        await job.Finished.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(ScanJobStatus.Canceled, job.Status);
+        Assert.Equal("canceled", job.ErrorCode);
+    }
+
+    [Fact]
+    public async Task A_flatbed_one_sheet_scan_is_one_page_and_does_not_wait()
+    {
+        var mock = new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.Zero, FeederSheets = 0 });
+        using var runtime = TestRuntime.Create(backend: mock);
+        runtime.Origins.Pair(Origin);
+
+        var job = runtime.Jobs.Start(
+            Origin,
+            new ScanOptions { Source = PaperSource.Flatbed, ScannerId = MockScannerBackend.FlatbedId, Duplex = true, OneSheet = true },
+            ScanTrigger.Api);
+        await job.Finished.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(ScanJobStatus.Completed, job.Status);
+        Assert.Single(job.Pages);
+        Assert.False(job.UsedFeeder);
+    }
+
+    [Fact]
     public async Task Scans_run_one_at_a_time()
     {
         var backend = new ConcurrencyProbe();

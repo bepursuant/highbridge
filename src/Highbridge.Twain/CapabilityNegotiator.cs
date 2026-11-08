@@ -40,9 +40,9 @@ internal sealed class CapabilityNegotiator(DataSource source, TwainSession sessi
         ApplyPaperSource(caps, options.Source);
         ApplyDuplex(caps, options.Duplex);
 
-        if (options.MaxPages > 0)
+        if (options.EffectivePageLimit() is int pages)
         {
-            TrySet(caps.CapXferCount, CapabilityId.CapXferCount, options.MaxPages, new TWOneValue { Item = (uint)options.MaxPages, ItemType = ItemType.Int16 });
+            TrySet(caps.CapXferCount, CapabilityId.CapXferCount, pages, new TWOneValue { Item = (uint)pages, ItemType = ItemType.Int16 });
         }
 
         if (!options.ShowDriverUi)
@@ -179,6 +179,59 @@ internal sealed class CapabilityNegotiator(DataSource source, TwainSession sessi
                 logger.LogInformation("Paper source: the source's default (feeder enabled: {Feeder})", hasFeeder ? Describe(feeder) : "no feeder control");
                 break;
         }
+    }
+
+    /// <summary>
+    /// Enables the feeder when this scan uses it. Null when the scan is not a feeder scan.
+    /// False when CAP_FEEDERLOADED says the feeder is empty. True when paper is loaded, or when
+    /// the source cannot report that capability.
+    /// </summary>
+    internal bool? OneSheetFeeder(ScanOptions options)
+    {
+        var feeder = source.Capabilities.CapFeederEnabled;
+        bool hasFeeder = feeder.IsSupported;
+        switch (options.Source)
+        {
+            case PaperSource.Flatbed:
+                return null;
+            case PaperSource.Feeder when !hasFeeder:
+                logger.LogWarning("One sheet was requested, but the source has no CAP_FEEDERENABLED; this scan will not wait for paper");
+                return null;
+            case PaperSource.Feeder:
+                bool enabled = TrySet(feeder, CapabilityId.CapFeederEnabled, BoolType.True, Bool(true));
+                if (!enabled && Current(feeder) != BoolType.True)
+                {
+                    logger.LogWarning("Could not enable the feeder for a one-sheet scan; this scan will not wait for paper");
+                    return null;
+                }
+
+                if (source.Capabilities.CapAutoFeed.IsSupported)
+                {
+                    TrySet(source.Capabilities.CapAutoFeed, CapabilityId.CapAutoFeed, BoolType.True, Bool(true));
+                }
+
+                return FeederIsLoaded();
+            default:
+                if (!hasFeeder || Current(feeder) != BoolType.True)
+                {
+                    return null;
+                }
+
+                return FeederIsLoaded();
+        }
+    }
+
+    /// <summary>True when the feeder has paper, or when the source cannot say.</summary>
+    internal bool FeederIsLoaded()
+    {
+        var loaded = source.Capabilities.CapFeederLoaded;
+        if (!loaded.IsSupported)
+        {
+            return true;
+        }
+
+        // Unknown reads as "don't wait forever". False is the only empty answer.
+        return Current(loaded) != BoolType.False;
     }
 
     private void ApplyDuplex(ICapabilities caps, bool duplex)

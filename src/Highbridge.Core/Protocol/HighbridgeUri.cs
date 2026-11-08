@@ -150,6 +150,11 @@ public static class HighbridgeUri
         Append(sb, "colorMode", ToCamel(options.ColorMode.ToString()));
         Append(sb, "source", ToCamel(options.Source.ToString()));
         Append(sb, "duplex", options.Duplex ? "true" : "false");
+        if (options.OneSheet)
+        {
+            Append(sb, "oneSheet", "true");
+        }
+
         if (options.ShowDriverUi)
         {
             Append(sb, "showDriverUi", "true");
@@ -319,12 +324,14 @@ public static class HighbridgeUri
             options = options with { Source = value };
         }
 
-        if (!TryReadBool(p, "duplex", out bool? duplex, ref error) || !TryReadBool(p, "showDriverUi", out bool? showUi, ref error))
+        if (!TryReadBool(p, "duplex", out bool? duplex, ref error)
+            || !TryReadBool(p, "showDriverUi", out bool? showUi, ref error)
+            || !TryReadBool(p, "oneSheet", out bool? oneSheet, ref error))
         {
             return false;
         }
 
-        options = options with { Duplex = duplex ?? false, ShowDriverUi = showUi ?? false };
+        options = options with { Duplex = duplex ?? false, ShowDriverUi = showUi ?? false, OneSheet = oneSheet ?? false };
 
         if (p.TryGetValue("maxPages", out string? maxPages))
         {

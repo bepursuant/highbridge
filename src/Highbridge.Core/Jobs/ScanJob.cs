@@ -96,6 +96,12 @@ public sealed class ScanJob
     public string? ScanId { get; internal init; }
 
     /// <summary>
+    /// Set for a one-sheet job. False when the scan did not use the feeder, so a session must not
+    /// loop it. Null on an ordinary job.
+    /// </summary>
+    public bool? UsedFeeder { get; internal set; }
+
+    /// <summary>
     /// Pages received from the scanner so far. Stamped jobs hold their pages until the scan ends
     /// (the band says "page N of M"), so this can be ahead of <see cref="Pages"/>.
     /// </summary>

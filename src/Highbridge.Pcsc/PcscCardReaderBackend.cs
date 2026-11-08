@@ -40,6 +40,43 @@ public sealed class PcscCardReaderBackend : ICardReaderBackend
     public Task<CardReadResult> ReadAsync(CardReadOptions options, CancellationToken cancellationToken) =>
         Task.Run(() => Read(options, cancellationToken), cancellationToken);
 
+    public Task WaitForCardRemovalAsync(CardReadOptions options, CancellationToken cancellationToken)
+    {
+        if (!options.WaitForRemoval)
+        {
+            return Task.CompletedTask;
+        }
+
+        return Task.Run(() => WaitForRemoval(options, cancellationToken), cancellationToken);
+    }
+
+    private void WaitForRemoval(CardReadOptions options, CancellationToken cancellationToken)
+    {
+        IntPtr context = Winscard.Establish();
+        try
+        {
+            IReadOnlyList<string> readers = Winscard.ListReaders(context);
+            IReadOnlyList<string>? watched = CardSlots.WatchList(readers, options.ReaderId);
+            if (watched is null)
+            {
+                throw CardReaderException.ReaderNotFound();
+            }
+
+            if (watched.Count == 0)
+            {
+                throw CardReaderException.NoReaders();
+            }
+
+            // The reader name is a device name. The card number is not written here.
+            _logger.LogInformation("Waiting for the card to leave {Reader}", string.IsNullOrWhiteSpace(options.ReaderId) ? "(any)" : options.ReaderId);
+            Winscard.WaitUntilGone(context, watched, cancellationToken);
+        }
+        finally
+        {
+            Winscard.Release(context);
+        }
+    }
+
     private CardReadResult Read(CardReadOptions options, CancellationToken cancellationToken)
     {
         string logged = string.IsNullOrWhiteSpace(options.ReaderId) ? "(default)" : options.ReaderId;

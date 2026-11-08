@@ -76,10 +76,16 @@
         <p class="hint">Adds a band with the scan time, computer, Windows user, scanner, page number, this site and a scan id. highbridge fills it in; the page only picks where it goes.</p>
 
         <label class="check"><input type="checkbox" name="duplex" /> Scan both sides (duplex)</label>
+        <label class="check"><input type="checkbox" name="oneSheet" /> One sheet at a time</label>
+        <p class="hint">On a duplex feeder, each scan is the front and the back of one sheet. Further sheets stay for the next pass. An empty feeder waits. Off, one scan takes the whole feeder. A flatbed is always a single scan.</p>
         <label class="check"><input type="checkbox" name="showDriverUi" /> Use the scanner's own settings dialog</label>
         <label class="check"><input type="checkbox" name="barcodes" /> Find barcodes (QR, Data Matrix, PDF417, Code 128/39, EAN/UPC, ITF)</label>
 
-        <button type="submit" id="scan" class="primary">Scan</button>
+        <div class="row actions">
+          <button type="submit" id="scan" class="primary">Scan</button>
+          <button type="button" id="scan-start" class="secondary">Start</button>
+          <button type="button" id="scan-stop" class="secondary" disabled>Stop</button>
+        </div>
         <p id="progress" class="progress" aria-live="polite"></p>
       </form>
 
@@ -151,7 +157,12 @@
         </label>
         <p class="hint">How long to wait for a card, from 0 to 120000 milliseconds. 0 fails at once if the reader is empty.</p>
 
-        <button type="submit" id="read-card" class="primary">Read card</button>
+        <div class="row actions">
+          <button type="submit" id="read-card" class="primary">Read card</button>
+          <button type="button" id="card-start" class="secondary">Start</button>
+          <button type="button" id="card-stop" class="secondary" disabled>Stop</button>
+        </div>
+        <p class="hint">Start keeps reading until Stop. The next card is read only after the previous one has left the slot. The same reader, interface, application, and wait apply to every pass.</p>
         <p id="card-progress" class="progress" aria-live="polite"></p>
       </form>
 

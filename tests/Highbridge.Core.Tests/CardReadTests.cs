@@ -53,6 +53,31 @@ public class CardReadTests
     }
 
     [Fact]
+    public async Task The_next_read_waits_until_the_card_has_left_the_slot()
+    {
+        var backend = new MockCardReaderBackend { CardPresent = true };
+        using var runtime = TestRuntime.Create(cardReader: backend);
+        runtime.Origins.Pair(Origin);
+
+        var first = runtime.CardReads.Start(Origin, new CardReadOptions { Interface = CardInterface.Auto }, CardReadTrigger.Api);
+        await first.Finished.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(CardReadStatus.Completed, first.Status);
+        Assert.Equal(MockCardReaderBackend.VisaPan, first.Result!.Selected.Pan);
+        Assert.DoesNotContain(MockCardReaderBackend.VisaPan, first.ToString(), StringComparison.Ordinal);
+
+        var next = runtime.CardReads.Start(Origin, new CardReadOptions { Interface = CardInterface.Auto, WaitForRemoval = true }, CardReadTrigger.Api);
+        await Task.Delay(80);
+        Assert.Equal(CardReadStatus.Reading, next.Status);
+        Assert.Null(next.Result);
+
+        backend.CardPresent = false;
+        await next.Finished.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(CardReadStatus.Completed, next.Status);
+        Assert.Equal(MockCardReaderBackend.VisaPan, next.Result!.Selected.Pan);
+        Assert.DoesNotContain(MockCardReaderBackend.VisaPan, next.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Deleting_a_finished_read_wipes_the_card_number()
     {
         using var runtime = TestRuntime.Create();
@@ -164,6 +189,9 @@ public class CardReadTests
             Interlocked.Increment(ref _reads);
             return _inner.ReadAsync(options, cancellationToken);
         }
+
+        public Task WaitForCardRemovalAsync(CardReadOptions options, CancellationToken cancellationToken) =>
+            _inner.WaitForCardRemovalAsync(options, cancellationToken);
     }
 
     private sealed class GatedCards(TaskCompletionSource started, TaskCompletionSource release) : ICardReaderBackend

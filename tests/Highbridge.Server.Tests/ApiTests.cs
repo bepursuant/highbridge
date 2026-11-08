@@ -352,6 +352,36 @@ public sealed class ApiTests : IAsyncLifetime
         Assert.All(job.Pages, p => Assert.Equal(Provenance.StampPosition.Bottom, p.Provenance!.Position));
     }
 
+    [Fact]
+    public async Task One_sheet_returns_front_and_back_and_waits_when_the_feeder_is_empty()
+    {
+        _runtime.Origins.Pair(Site);
+        var first = await FinishedOneSheet();
+        var second = await FinishedOneSheet();
+
+        Assert.Equal(Jobs.ScanJobStatus.Completed, first.Status);
+        Assert.Equal(2, first.Pages.Count);
+        Assert.True(first.UsedFeeder);
+        Assert.Equal(2, second.Pages.Count);
+
+        var create = Request(HttpMethod.Post, "/v1/scans", Site);
+        create.Content = JsonContent.Create(new { source = "feeder", duplex = true, oneSheet = true });
+        var third = await Json<ScanJobResponse>(await _http.SendAsync(create));
+        await Task.Delay(150);
+        var pending = await GetJson<ScanJobResponse>($"/v1/scans/{third.Id}", Site);
+        Assert.Null(pending.FinishedAt);
+        Assert.Equal(Jobs.ScanJobStatus.Scanning, pending.Status);
+        Assert.Equal(HttpStatusCode.NoContent, (await _http.SendAsync(Request(HttpMethod.Delete, $"/v1/scans/{third.Id}", Site))).StatusCode);
+    }
+
+    private async Task<ScanJobResponse> FinishedOneSheet()
+    {
+        var create = Request(HttpMethod.Post, "/v1/scans", Site);
+        create.Content = JsonContent.Create(new { source = "feeder", duplex = true, oneSheet = true });
+        var created = await Json<ScanJobResponse>(await _http.SendAsync(create));
+        return await PollUntilFinished(created.Id, Site);
+    }
+
     private async Task StartAsync()
     {
         // Normal priority and a longer page budget than production. The product still uses a

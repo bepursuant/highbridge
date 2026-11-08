@@ -42,16 +42,20 @@ Status: **proof of concept** for Windows 10/11 workstations (32-bit build, PNG o
 | `GET /v1/status` | `{app, version, apiVersion, backend, devices: [{kind, backend}], paired, pairingAllowed}`. `backend` stays the scanner backend |
 | `POST /v1/pair` | Ask the user to approve this site |
 | `GET /v1/scanners` | List scanners (paired sites only) |
-| `POST /v1/scans` | Body: `{scannerId?, dpi, colorMode: color\|gray\|blackWhite, source: auto\|flatbed\|feeder, duplex, showDriverUi, maxPages, format: png, stamp?: {position: top\|bottom}, barcodes?, barcodeFormats?}`. Returns `202` with the job |
+| `POST /v1/scans` | Body: `{scannerId?, dpi, colorMode: color\|gray\|blackWhite, source: auto\|flatbed\|feeder, duplex, oneSheet?, showDriverUi, maxPages, format: png, stamp?: {position: top\|bottom}, barcodes?, barcodeFormats?}`. Returns `202` with the job |
 | `GET /v1/scans/{id}` | Job status: `queued`, `scanning`, `completed`, `failed` or `canceled`, plus pages. With `barcodes: true`, also the barcodes found |
 | `GET /v1/scans/{id}/pages/{n}` | Page image (`image/png`) |
 | `DELETE /v1/scans/{id}` | Discard or cancel a job |
 | `GET /v1/card-readers` | List readers (`{id, name, backend}`). No card-present flag. Current approval required |
-| `POST /v1/card-reads` | Body: `{readerId?, interface: auto\|contact\|contactless, aid?, waitForCardMs?}`. Returns `202` with the job. No APDU fields |
+| `POST /v1/card-reads` | Body: `{readerId?, interface: auto\|contact\|contactless, aid?, waitForCardMs?, waitForRemoval?}`. Returns `202` with the job. No APDU fields |
 | `GET /v1/card-reads/{id}` | Job status: `queued`, `reading`, `completed`, `failed` or `canceled`. The card fields are inline when completed. Also claims a `highbridge://read-card` job |
 | `DELETE /v1/card-reads/{id}` | Discard or cancel a card read |
 
 `format` is optional and only `png` is accepted for now; the option exists so PDF can be added later without changing the API shape.
+
+`oneSheet: true` (also `oneSheet=true` on `highbridge://scan`) makes a feeder scan one sheet. With duplex, that is the front and the back only; further sheets stay for the next job. The job waits while the feeder is empty instead of failing. Off, one job still takes the whole feeder. A flatbed is one shot.
+
+`scanSession` and `readCardSession` in the JS client arm that from one click. They repeat the existing POST and status poll until Stop or an error that needs a person. A card session does not read again until that card has left the slot (`waitForRemoval` on the later reads). The card number is still only on the completed job. Pairing, claim timeouts, and the one-job locks are unchanged.
 
 `barcodes: true` finds barcodes on each page (QR, Data Matrix, PDF417, Code 128, Code 39, EAN-13, EAN-8, UPC-A, UPC-E and ITF, unless `barcodeFormats` names a subset, for example `["qrCode", "code128"]`). It is off unless asked. Detection runs in the background, on a copy of the page as the scanner delivered it, and the job stays `scanning` until it finishes. Each barcode is `{page, format, text, rotation, orientation, points}`: `rotation` is which way the page was turned to read it (0, 90, 180 or 270 degrees clockwise), `orientation` is the code's own angle on the page when it can be measured, and `points` are page-pixel coordinates. Pages also carry `barcodeStatus`: `done`, `partial` (the time budget ran out), `failed` or `skipped`. The same list is repeated once per page and once for the whole job. A `highbridge://scan` link takes the same options as `barcodes=true&barcodeFormats=qrCode,code128`. A stamp, when one is requested, is applied after that copy is taken, so detection sees the unstamped page.
 

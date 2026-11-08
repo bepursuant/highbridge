@@ -57,16 +57,18 @@ Steady state for a paired site on a machine where the LNA permission is granted:
 | `GET /v1/status` | any valid origin | `{app, version, apiVersion, backend, devices, paired, pairingAllowed}` |
 | `POST /v1/pair` | any valid origin | Shows the pairing prompt; returns `{paired}` |
 | `GET /v1/scanners` | paired | List sources |
-| `POST /v1/scans` | paired | `{scannerId?, dpi, colorMode, duplex, source, showDriverUi, maxPages, format: "png", stamp?: {position}, barcodes?, barcodeFormats?}` → `202 {id, status, format, stamp?, pagesScanned, …}` |
+| `POST /v1/scans` | paired | `{scannerId?, dpi, colorMode, duplex, oneSheet?, source, showDriverUi, maxPages, format: "png", stamp?: {position}, barcodes?, barcodeFormats?}` → `202 {id, status, format, stamp?, pagesScanned, usedFeeder?, …}` |
 | `GET /v1/scans/{id}` | job owner | Status (`queued`, `scanning`, `completed`, `failed`, `canceled`) plus page list, and barcodes when requested. Also claims a protocol-launched job |
 | `GET /v1/scans/{id}/pages/{n}` | job owner | `image/png` |
 | `DELETE /v1/scans/{id}` | job owner | Discard |
 | `GET /v1/card-readers` | current approval | `{readers: [{id, name, backend}]}` |
-| `POST /v1/card-reads` | current approval | `{readerId?, interface, aid?, waitForCardMs?}` → `202` |
+| `POST /v1/card-reads` | current approval | `{readerId?, interface, aid?, waitForCardMs?, waitForRemoval?}` → `202` |
 | `GET /v1/card-reads/{id}` | job owner | Status, and the allowlisted card fields when completed. Claims a protocol job |
 | `DELETE /v1/card-reads/{id}` | job owner | Discard |
 
 JS client (`clients/js/highbridge.js`, an ES module with no dependencies): `status()`, `pair()`, `listScanners()`, `scan(options)`, `listCardReaders()`, and `readCard(options)`. If the app is not reachable, `scan` falls back to `highbridge://scan` and `readCard` falls back to `highbridge://read-card`. Both poll by request id, which claims the job.
+
+`scanSession` and `readCardSession` arm a session from one click. The client repeats the existing POST and `GET` status poll (`pollIntervalMs` is unchanged) until Stop or an error that needs a person. There is no WebSocket and no long-poll. A card session sets `waitForRemoval` after the first card, so the next read starts only once that card has left the slot; contact and contactless stay on the requested interface (`auto` unless the page says otherwise). The card number is still only on the completed job, over `127.0.0.1`. `oneSheet: true` makes one feeder scan one sheet — the front and the back when duplex is on, and nothing after them. The job waits while `CAP_FEEDERLOADED` says the feeder is empty instead of failing the session. With `oneSheet` off, one job still pulls the whole feeder. A flatbed scan is not repeated. Form options are read again on every cycle when the page passes a function. Pairing, the claim timeout, and the one-job-at-a-time locks are unchanged.
 
 ### Barcode recognition
 

@@ -223,6 +223,94 @@ internal static class Winscard
         }
     }
 
+    /// <summary>
+    /// Blocks until none of <paramref name="readers"/> has a card, or the token fires.
+    /// An already-empty slot returns at once. There is no deadline: a session waits until
+    /// the card leaves or the page stops it.
+    /// </summary>
+    internal static void WaitUntilGone(IntPtr context, IReadOnlyList<string> readers, CancellationToken cancellationToken)
+    {
+        if (readers.Count == 0)
+        {
+            throw CardReaderException.NoReaders();
+        }
+
+        var names = new IntPtr[readers.Count];
+        try
+        {
+            var states = new ScardReaderState[readers.Count];
+            for (int i = 0; i < readers.Count; i++)
+            {
+                names[i] = Marshal.StringToHGlobalAnsi(readers[i]);
+                states[i] = new ScardReaderState
+                {
+                    Reader = names[i],
+                    CurrentState = StateUnaware,
+                    Atr = new byte[36],
+                };
+            }
+
+            Check(SCardGetStatusChange(context, 0, states, (uint)states.Length));
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int unavailable = 0;
+                bool occupied = false;
+                for (int i = 0; i < states.Length; i++)
+                {
+                    uint state = states[i].EventState;
+                    if ((state & StateUnavailable) != 0)
+                    {
+                        unavailable++;
+                        continue;
+                    }
+
+                    if (Present(state))
+                    {
+                        occupied = true;
+                    }
+                }
+
+                if (unavailable == states.Length)
+                {
+                    throw CardReaderException.ReadFailed();
+                }
+
+                if (!occupied)
+                {
+                    return;
+                }
+
+                for (int i = 0; i < states.Length; i++)
+                {
+                    states[i].CurrentState = states[i].EventState & ~StateChanged;
+                }
+
+                int rc = SCardGetStatusChange(context, 250, states, (uint)states.Length);
+                if (Code(rc) == Timeout)
+                {
+                    continue;
+                }
+
+                Check(rc);
+            }
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            throw CardReaderException.PcscUnavailable(ex);
+        }
+        finally
+        {
+            foreach (IntPtr name in names)
+            {
+                if (name != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(name);
+                }
+            }
+        }
+    }
+
     internal static (IntPtr Card, uint Protocol) Connect(IntPtr context, string reader)
     {
         try
