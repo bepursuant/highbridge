@@ -235,7 +235,7 @@ Files:
 | Path | Contents |
 |---|---|
 | `%APPDATA%\Highbridge\settings.json` | Approved sites |
-| `%LOCALAPPDATA%\Highbridge\logs\highbridge.log` | Log (rolls over to `highbridge.log.1` at 5 MB) |
+| `%LOCALAPPDATA%\Highbridge\logs\highbridge.log` | Log (rolls at 5 MB and keeps `highbridge.log.1` through `highbridge.log.3`) |
 | `%LOCALAPPDATA%\Highbridge\logs\scanner-diagnostics.txt` | Last **Diagnose scanner** report |
 | `%LOCALAPPDATA%\Highbridge\logs\twaindsm.log` | TWAIN manager trace from the scanner tools (only with `TWAINDSM.dll`) |
 | `%LOCALAPPDATA%\Highbridge\logs\test-scan-<n>.png` | Pages from the last **Test scan** |
@@ -243,7 +243,7 @@ Files:
 
 ### Scanner troubleshooting
 
-All logs are in `%LOCALAPPDATA%\Highbridge\logs` (for example `C:\Users\<you>\AppData\Local\Highbridge\logs`); the tray menu's **Open log folder** opens it. Every scan logs each TWAIN step: the TWAIN manager and source in use (name, manufacturer, `.ds` file, whether it is the WIA-TWAIN layer), each setting with its old value, the requested value and the result (with the TWAIN condition code when the scanner rejects it), every state change and transfer. A rejected setting is never fatal: the scanner's own value is used. A scan that makes no progress for 2 minutes (5 while a page transfers or the driver's own window is open) fails with `scan_timeout` instead of hanging the page.
+All logs are in `%LOCALAPPDATA%\Highbridge\logs` (for example `C:\Users\<you>\AppData\Local\Highbridge\logs`); the tray menu's **Open log folder** opens it. **Devices** lists connected scanners and card readers, and **Copy summary** puts that list on the clipboard. The log starts with the app version, machine, user, and port, then the card readers. Opening Devices records the scanners and card readers. Each scan or card read has a started line and a finished line (status and error code; reader name, interface, and AID for a card). A card number or a long hex blob is stripped before the line is written. Every scan logs each TWAIN step: the TWAIN manager and source in use (name, manufacturer, `.ds` file, whether it is the WIA-TWAIN layer), each setting with its old value, the requested value and the result (with the TWAIN condition code when the scanner rejects it), every state change and transfer. A rejected setting is never fatal: the scanner's own value is used. A scan that makes no progress for 2 minutes (5 while a page transfers or the driver's own window is open) fails with `scan_timeout` instead of hanging the page.
 
 When a scanner misbehaves:
 
