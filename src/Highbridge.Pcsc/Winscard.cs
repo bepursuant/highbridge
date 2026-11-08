@@ -33,6 +33,10 @@ internal static class Winscard
     private const uint ResetCard = 0x80100068;
     private const uint RemovedCard = 0x80100069;
     private const uint Unresponsive = 0x80100066;
+    private const uint NotTransacted = 0x80100016;
+    private const uint PciTooSmall = 0x80100019;
+    private const uint InternalError = 0x80100001;
+    private const uint ResetInit = 1;
 
     internal static IntPtr Establish()
     {
@@ -345,49 +349,101 @@ internal static class Winscard
 
     private static byte[] TransmitRaw(IntPtr card, ref uint protocol, byte[] apdu)
     {
-        int rc = TransmitOnce(card, protocol, apdu, out byte[] received);
-        if (rc == 0)
+        // Contact (T=0) accepts the exported PCI with no receive header. Contactless (T=1) often
+        // rejects that and returns a Windows code, which the page was showing as a failed read.
+        // Each attempt sends this same command; none of them is a second processing-options call.
+        if (TryStyles(card, protocol, apdu, out byte[] received, out int rc))
         {
             return received;
         }
 
-        // Contactless readers often reset the card on the first command. The command was not
-        // accepted, so reconnect once and send it again.
-        if (Code(rc) is ResetCard or RemovedCard)
+        // Some tap drivers accept the command only after the transaction is dropped.
+        try
         {
-            int again = SCardReconnect(card, ShareShared, ProtocolT0 | ProtocolT1 | ProtocolRaw, LeaveCard, out uint next);
-            if (again == 0 && next is ProtocolT0 or ProtocolT1 or ProtocolRaw)
-            {
-                protocol = next;
-                rc = TransmitOnce(card, protocol, apdu, out received);
-                if (rc == 0)
-                {
-                    return received;
-                }
-            }
+            SCardEndTransaction(card, LeaveCard);
+        }
+        catch (DllNotFoundException)
+        {
+        }
+
+        if (TryStyles(card, protocol, apdu, out received, out rc))
+        {
+            return received;
+        }
+
+        if (Transport(Code(rc)) && Reconnect(card, ref protocol, ProtocolT0 | ProtocolT1 | ProtocolRaw, ResetInit)
+            && TryStyles(card, protocol, apdu, out received, out rc))
+        {
+            return received;
+        }
+
+        if (Transport(Code(rc)) && Reconnect(card, ref protocol, ProtocolRaw, LeaveCard)
+            && TryStyles(card, protocol, apdu, out received, out rc))
+        {
+            return received;
         }
 
         throw Map(rc);
     }
 
-    private static int TransmitOnce(IntPtr card, uint protocol, byte[] apdu, out byte[] received)
+    private static bool TryStyles(IntPtr card, uint protocol, byte[] apdu, out byte[] received, out int rc)
+    {
+        // The first shape is the one contact already accepts. The others are for T=1 drivers.
+        rc = TransmitOnce(card, protocol, apdu, useGlobal: true, withRecvPci: false, out received);
+        if (rc == 0 || !PciShape(Code(rc)))
+        {
+            return rc == 0;
+        }
+
+        rc = TransmitOnce(card, protocol, apdu, useGlobal: true, withRecvPci: true, out received);
+        if (rc == 0 || !PciShape(Code(rc)))
+        {
+            return rc == 0;
+        }
+
+        rc = TransmitOnce(card, protocol, apdu, useGlobal: false, withRecvPci: true, out received);
+        return rc == 0;
+    }
+
+    private static bool Reconnect(IntPtr card, ref uint protocol, uint protocols, uint initialization)
+    {
+        int rc = SCardReconnect(card, ShareShared, protocols, initialization, out uint next);
+        if (rc != 0 || next is not (ProtocolT0 or ProtocolT1 or ProtocolRaw))
+        {
+            return false;
+        }
+
+        protocol = next;
+        return true;
+    }
+
+    private static int TransmitOnce(IntPtr card, uint protocol, byte[] apdu, bool useGlobal, bool withRecvPci, out byte[] received)
     {
         received = [];
-        IntPtr pci = ProtocolPci(protocol);
-        IntPtr owned = IntPtr.Zero;
+        int size = Marshal.SizeOf<ScardIoRequest>();
+        IntPtr sendOwned = IntPtr.Zero;
+        IntPtr recvOwned = IntPtr.Zero;
         try
         {
-            if (pci == IntPtr.Zero)
+            IntPtr send = useGlobal ? ProtocolPci(protocol) : IntPtr.Zero;
+            if (send == IntPtr.Zero)
             {
-                int size = Marshal.SizeOf<ScardIoRequest>();
-                owned = Marshal.AllocHGlobal(size);
-                Marshal.StructureToPtr(new ScardIoRequest { Protocol = protocol, PciLength = (uint)size }, owned, false);
-                pci = owned;
+                sendOwned = Marshal.AllocHGlobal(size);
+                WritePci(sendOwned, protocol, size);
+                send = sendOwned;
+            }
+
+            IntPtr recvPci = IntPtr.Zero;
+            if (withRecvPci)
+            {
+                recvOwned = Marshal.AllocHGlobal(size);
+                WritePci(recvOwned, protocol, size);
+                recvPci = recvOwned;
             }
 
             var recv = new byte[258];
             uint length = (uint)recv.Length;
-            int rc = SCardTransmit(card, pci, apdu, (uint)apdu.Length, IntPtr.Zero, recv, ref length);
+            int rc = SCardTransmit(card, send, apdu, (uint)apdu.Length, recvPci, recv, ref length);
             if (rc != 0)
             {
                 return rc;
@@ -407,12 +463,20 @@ internal static class Winscard
         }
         finally
         {
-            if (owned != IntPtr.Zero)
+            if (sendOwned != IntPtr.Zero)
             {
-                Marshal.FreeHGlobal(owned);
+                Marshal.FreeHGlobal(sendOwned);
+            }
+
+            if (recvOwned != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(recvOwned);
             }
         }
     }
+
+    private static void WritePci(IntPtr destination, uint protocol, int size) =>
+        Marshal.StructureToPtr(new ScardIoRequest { Protocol = protocol, PciLength = (uint)size }, destination, false);
 
     /// <summary>
     /// Contactless T=1 drivers reject a caller-built PCI and return a Windows SCard error.
@@ -446,6 +510,12 @@ internal static class Winscard
     private static bool RetryableConnect(uint code) =>
         code is ProtoMismatch or InvalidParameter or Unresponsive or 87;
 
+    private static bool PciShape(uint code) =>
+        code is InvalidParameter or PciTooSmall or NotTransacted or InternalError or SharingViolation or 87;
+
+    private static bool Transport(uint code) =>
+        PciShape(code) || code is ResetCard or RemovedCard or Unresponsive or ProtoMismatch;
+
     private static byte[] CopyAtr(ScardReaderState state)
     {
         if (state.Atr is not { Length: > 0 })
@@ -475,7 +545,7 @@ internal static class Winscard
             Unresponsive or 0x80100067 => CardReaderException.CardUnresponsive(),
             Timeout => new CardReaderException("read_timeout", "The card reader did not finish the read. Check the reader, then try again."),
             0x8010001D or 0x8010001E => CardReaderException.PcscUnavailable(),
-            _ => CardReaderException.ReadFailed(),
+            _ => new CardReaderException("read_failed", $"The card could not be read. (PC/SC {Code(rc):X8})"),
         };
         ex.PcscCode = Code(rc);
         return ex;
@@ -566,12 +636,12 @@ internal static class Winscard
     [DllImport("winscard.dll", EntryPoint = "SCardReconnect")]
     private static extern int SCardReconnect(IntPtr card, uint shareMode, uint protocols, uint initialization, out uint activeProtocol);
 
-    [DllImport("kernel32.dll", EntryPoint = "GetModuleHandleA", CharSet = CharSet.Ansi)]
+    [DllImport("kernel32.dll", EntryPoint = "GetModuleHandleA", CharSet = CharSet.Ansi, ExactSpelling = true)]
     private static extern IntPtr GetModuleHandle(string name);
 
-    [DllImport("kernel32.dll", EntryPoint = "LoadLibraryA", CharSet = CharSet.Ansi)]
+    [DllImport("kernel32.dll", EntryPoint = "LoadLibraryA", CharSet = CharSet.Ansi, ExactSpelling = true)]
     private static extern IntPtr LoadLibrary(string name);
 
-    [DllImport("kernel32.dll", EntryPoint = "GetProcAddress", CharSet = CharSet.Ansi)]
+    [DllImport("kernel32.dll", EntryPoint = "GetProcAddress", CharSet = CharSet.Ansi, ExactSpelling = true)]
     private static extern IntPtr GetProcAddress(IntPtr module, string name);
 }

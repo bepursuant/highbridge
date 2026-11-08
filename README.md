@@ -286,7 +286,7 @@ Copy `clients/js/highbridge.js` (and `highbridge.d.ts` for TypeScript) into your
 ## Known limitations (POC)
 
 - **Barely tested with real scanners.** The MSI and tray app work on Windows; the first real scan (a Samsung all-in-one) hung, which led to the current TWAIN threading. The TWAIN backend is tested under Wine against a fake source (`scripts/test-twain-wine.sh`), not yet against real drivers.
-- **Card reads are covered by the mock reader in CI.** A real contact reader has been read through PC/SC. Contactless uses the same read: both slots of a dual reader are watched, and PSE is tried if PPSE is not on the card. Confirm that on the contactless slot of your reader.
+- **Card reads are covered by the mock reader in CI.** A real contact reader has been read through PC/SC. A tap uses the same read: both slots of a dual reader are watched, PPSE is tried and then PSE, and the Windows call is retried in the shapes contactless drivers accept. Restart the tray app from this build before trying a tap. If Windows still rejects it, the page message includes the PC/SC code.
 - PNG output only (PDF is planned). Large color scans at 600 dpi produce big PNGs, and everything is held in memory.
 - 32-bit only, so only 32-bit TWAIN drivers are visible.
 - Canceling a scan stops at the next page boundary. Scans waiting in the driver's own dialog cannot be aborted from the web page.

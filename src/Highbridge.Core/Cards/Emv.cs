@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using Great.EmvTags;
 
@@ -42,10 +44,14 @@ internal static class Emv
 
     internal static byte[] GetResponse(byte le) => [0x00, 0xC0, 0x00, 0x00, le];
 
-    /// <summary>GET PROCESSING OPTIONS. PDOL lengths come from Great.EmvTags; every value is zeros.</summary>
+    /// <summary>
+    /// GET PROCESSING OPTIONS. PDOL lengths come from Great.EmvTags. Amount stays zero.
+    /// The contactless capability bitmap and the unpredictable number are terminal data, because a
+    /// tap treats an all-zero bitmap as "this reader cannot take a tap."
+    /// </summary>
     internal static byte[] GetProcessingOptions(ReadOnlySpan<byte> pdol)
     {
-        byte[] values = pdol.IsEmpty ? [] : ZeroFillDol(pdol);
+        byte[] values = pdol.IsEmpty ? [] : FillDol(pdol);
         var data = new List<byte> { 0x83 };
         WriteLength(data, values.Length);
         data.AddRange(values);
@@ -220,7 +226,7 @@ internal static class Emv
         return new CardSelection(app.Aid, label, preferred, app.Priority, panLast4, expiry, name);
     }
 
-    private static byte[] ZeroFillDol(ReadOnlySpan<byte> dol)
+    private static byte[] FillDol(ReadOnlySpan<byte> dol)
     {
         EmvTlvList fields;
         try
@@ -240,14 +246,117 @@ internal static class Emv
                 throw new EmvFormatException();
             }
 
-            for (int n = 0; n < field.Length; n++)
-            {
-                output.Add(0);
-            }
+            output.AddRange(TerminalValue(field.Tag.Hex, field.Length));
         }
 
         return output.ToArray();
     }
+
+    /// <summary>
+    /// Values this terminal knows. Amount and anything else stay zero; the page never supplies them.
+    /// Country and currency follow the PC's region when we know it, so a tap is not sent a blank country.
+    /// </summary>
+    private static byte[] TerminalValue(string tag, int length)
+    {
+        string id = tag.Replace(" ", "", StringComparison.Ordinal).ToUpperInvariant();
+        byte[] raw = id switch
+        {
+            "9F66" => [0x36, 0x00, 0x00, 0x00],
+            "9F37" => RandomNumber(length),
+            "9F1A" => RegionCodes.Value.Country,
+            "5F2A" => RegionCodes.Value.Currency,
+            "9A" => BcdDate(DateTime.Now),
+            "9F21" => BcdTime(DateTime.Now),
+            "9F35" => [0x22],
+            _ => new byte[length],
+        };
+        return Fit(raw, length, Numeric(id));
+    }
+
+    private static bool Numeric(string tag) => tag is "9F1A" or "5F2A" or "9A" or "9F21" or "9F02" or "9F03" or "9C";
+
+    private static byte[] Fit(byte[] raw, int length, bool numeric)
+    {
+        if (raw.Length == length)
+        {
+            return raw;
+        }
+
+        var fitted = new byte[length];
+        int copy = Math.Min(raw.Length, length);
+        int source = raw.Length > length && numeric ? raw.Length - length : 0;
+        int destination = raw.Length < length && numeric ? length - raw.Length : 0;
+        Array.Copy(raw, source, fitted, destination, copy);
+        return fitted;
+    }
+
+    private static byte[] RandomNumber(int length)
+    {
+        var bytes = new byte[Math.Clamp(length, 1, 8)];
+        RandomNumberGenerator.Fill(bytes);
+        return bytes;
+    }
+
+    private static byte[] BcdDate(DateTime when) => [Bcd(when.Year % 100), Bcd(when.Month), Bcd(when.Day)];
+
+    private static byte[] BcdTime(DateTime when) => [Bcd(when.Hour), Bcd(when.Minute), Bcd(when.Second)];
+
+    private static byte Bcd(int value) => (byte)(((value / 10) << 4) | (value % 10));
+
+    private static readonly Lazy<(byte[] Country, byte[] Currency)> RegionCodes = new(ReadRegion);
+
+    private static (byte[] Country, byte[] Currency) ReadRegion()
+    {
+        try
+        {
+            if (Regions.TryGetValue(RegionInfo.CurrentRegion.TwoLetterISORegionName, out var pair))
+            {
+                return (Bcd3(pair.Country), Bcd3(pair.Currency));
+            }
+        }
+        catch (Exception)
+        {
+            // The invariant culture has no region. A missing country stays zero.
+        }
+
+        return ([0, 0], [0, 0]);
+    }
+
+    private static byte[] Bcd3(int value) => [Bcd(value / 100), Bcd(value % 100)];
+
+    private static readonly Dictionary<string, (int Country, int Currency)> Regions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["US"] = (840, 840),
+        ["CA"] = (124, 124),
+        ["GB"] = (826, 826),
+        ["AU"] = (36, 36),
+        ["NZ"] = (554, 554),
+        ["MX"] = (484, 484),
+        ["JP"] = (392, 392),
+        ["CN"] = (156, 156),
+        ["IN"] = (356, 356),
+        ["BR"] = (76, 986),
+        ["CH"] = (756, 756),
+        ["SE"] = (752, 752),
+        ["NO"] = (578, 578),
+        ["DK"] = (208, 208),
+        ["PL"] = (616, 985),
+        ["DE"] = (276, 978),
+        ["FR"] = (250, 978),
+        ["ES"] = (724, 978),
+        ["IT"] = (380, 978),
+        ["NL"] = (528, 978),
+        ["BE"] = (56, 978),
+        ["AT"] = (40, 978),
+        ["PT"] = (620, 978),
+        ["FI"] = (246, 978),
+        ["IE"] = (372, 978),
+        ["SG"] = (702, 702),
+        ["HK"] = (344, 344),
+        ["KR"] = (410, 410),
+        ["ZA"] = (710, 710),
+        ["AE"] = (784, 784),
+    };
 
     private static void WriteLength(List<byte> target, int length)
     {

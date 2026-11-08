@@ -22,13 +22,27 @@ public class EmvTests
     }
 
     [Fact]
-    public void Pdol_lengths_are_filled_with_zeros()
+    public void Pdol_amount_stays_zero_and_tags_are_not_echoed()
     {
         byte[] pdol = Tlv("9F38", Convert.FromHexString("9F02069F1A02"));
         byte[] gpo = Emv.GetProcessingOptions(Emv.Pdol(Wrap(pdol))!);
 
-        Assert.Equal(Convert.FromHexString("80A800000A8308000000000000000000"), gpo);
+        Assert.Equal(16, gpo.Length);
+        Assert.Equal(new byte[] { 0x80, 0xA8, 0x00, 0x00, 0x0A, 0x83, 0x08 }, gpo[..7]);
+        Assert.Equal(new byte[6], gpo[7..13]);
+        Assert.Equal(0x00, gpo[^1]);
         Assert.DoesNotContain("9F02", Convert.ToHexString(gpo), StringComparison.Ordinal);
+        Assert.DoesNotContain("9F1A", Convert.ToHexString(gpo), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Contactless_pdol_names_terminal_capabilities_and_keeps_amount_zero()
+    {
+        byte[] pdol = Tlv("9F38", Convert.FromHexString("9F66049F0206"));
+        byte[] gpo = Emv.GetProcessingOptions(Emv.Pdol(Wrap(pdol))!);
+
+        Assert.Equal(Convert.FromHexString("36000000000000000000"), gpo[7..17]);
+        Assert.Equal(0x00, gpo[^1]);
     }
 
     [Fact]

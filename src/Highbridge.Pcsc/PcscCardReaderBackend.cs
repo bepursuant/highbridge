@@ -44,8 +44,7 @@ public sealed class PcscCardReaderBackend : ICardReaderBackend
     {
         string logged = string.IsNullOrWhiteSpace(options.ReaderId) ? "(default)" : options.ReaderId;
         IntPtr context = IntPtr.Zero;
-        IntPtr card = IntPtr.Zero;
-        bool transaction = false;
+        bool reported = false;
         try
         {
             context = Winscard.Establish();
@@ -62,26 +61,72 @@ public sealed class PcscCardReaderBackend : ICardReaderBackend
             }
 
             var (reader, atr) = Winscard.WaitForCard(context, watched, options.Interface, options.ReaderId, options.WaitForCardMs, cancellationToken);
-            logged = reader;
-            var (connected, protocol) = Winscard.Connect(context, reader);
-            card = connected;
-            transaction = Winscard.TryBegin(card);
-            if (!transaction)
+            var order = new List<string> { reader };
+            foreach (string other in watched)
             {
-                _logger.LogWarning("Card read on {Reader} is continuing without an exclusive transaction", reader);
+                if (!order.Contains(other, StringComparer.OrdinalIgnoreCase))
+                {
+                    order.Add(other);
+                }
             }
 
-            var result = Exchange(card, ref protocol, reader, atr, options);
-            _logger.LogInformation(
-                "Card read on {Reader} via {Interface} selected {Aid}",
-                result.Reader.Name,
-                result.Interface,
-                result.Selected.Aid);
-            return result;
+            CardReaderException? failure = null;
+            for (int i = 0; i < order.Count; i++)
+            {
+                string candidate = order[i];
+                logged = candidate;
+                IntPtr card = IntPtr.Zero;
+                bool transaction = false;
+                try
+                {
+                    var (connected, protocol) = Winscard.Connect(context, candidate);
+                    card = connected;
+                    transaction = Winscard.TryBegin(card);
+                    if (!transaction)
+                    {
+                        _logger.LogWarning("Card read on {Reader} is continuing without an exclusive transaction", candidate);
+                    }
+
+                    var result = Exchange(card, ref protocol, candidate, candidate == reader ? atr : [], options);
+                    _logger.LogInformation(
+                        "Card read on {Reader} via {Interface} selected {Aid}",
+                        result.Reader.Name,
+                        result.Interface,
+                        result.Selected.Aid);
+                    return result;
+                }
+                catch (Exception ex) when (ex is CardReaderException or EmvFormatException)
+                {
+                    var mapped = ex as CardReaderException ?? CardReaderException.ReadFailed();
+                    failure ??= mapped;
+                    reported = true;
+                    _logger.LogWarning("Card read on {Reader} failed: {Code} {Pcsc}", candidate, mapped.Code, mapped.PcscCode is uint pcsc ? $"0x{pcsc:X8}" : "");
+                    if (i == order.Count - 1 || !AnotherSlot(mapped))
+                    {
+                        // An empty second slot should not hide the failure from the slot that had a card.
+                        throw mapped.Code == "no_card" && failure.Code != "no_card" ? failure : mapped;
+                    }
+                }
+                finally
+                {
+                    if (transaction)
+                    {
+                        Winscard.End(card);
+                    }
+
+                    Winscard.Disconnect(card);
+                }
+            }
+
+            throw failure ?? CardReaderException.ReadFailed();
         }
         catch (CardReaderException ex)
         {
-            _logger.LogWarning("Card read on {Reader} failed: {Code} {Pcsc}", logged, ex.Code, ex.PcscCode is uint pcsc ? $"0x{pcsc:X8}" : "");
+            if (!reported)
+            {
+                _logger.LogWarning("Card read on {Reader} failed: {Code} {Pcsc}", logged, ex.Code, ex.PcscCode is uint pcsc ? $"0x{pcsc:X8}" : "");
+            }
+
             throw;
         }
         catch (EmvFormatException)
@@ -91,15 +136,17 @@ public sealed class PcscCardReaderBackend : ICardReaderBackend
         }
         finally
         {
-            if (transaction)
-            {
-                Winscard.End(card);
-            }
-
-            Winscard.Disconnect(card);
             Winscard.Release(context);
         }
     }
+
+    /// <summary>
+    /// The other slot is worth a connect when this one had no directory or no card.
+    /// A Windows failure still stops here: retrying it on the other slot can send a second
+    /// processing-options command to the same card.
+    /// </summary>
+    private static bool AnotherSlot(CardReaderException ex) =>
+        ex.Code is "no_payment_apps" or "no_card" or "card_unresponsive" or "card_removed";
 
     private static CardReadResult Exchange(IntPtr card, ref uint protocol, string reader, byte[] atr, CardReadOptions options)
     {
@@ -116,9 +163,20 @@ public sealed class PcscCardReaderBackend : ICardReaderBackend
         var attempts = Directories(mode, reader);
         byte[]? directory = null;
         CardInterface used = attempts[0].Interface;
+        CardReaderException? transport = null;
         foreach (var attempt in attempts)
         {
-            directory = TryDirectory(card, ref protocol, attempt.Name);
+            try
+            {
+                directory = TryDirectory(card, ref protocol, attempt.Name);
+            }
+            catch (CardReaderException ex) when (ex.Code == "read_failed")
+            {
+                // This directory name was rejected by the driver. The other name is a different command.
+                transport = ex;
+                directory = null;
+            }
+
             if (directory is not null)
             {
                 used = attempt.Interface;
@@ -128,7 +186,7 @@ public sealed class PcscCardReaderBackend : ICardReaderBackend
 
         if (directory is null)
         {
-            throw CardReaderException.NoPaymentApps();
+            throw transport ?? CardReaderException.NoPaymentApps();
         }
 
         var apps = Emv.DirectoryEntries(directory);
@@ -216,9 +274,16 @@ public sealed class PcscCardReaderBackend : ICardReaderBackend
 
         foreach (var app in order)
         {
-            if (!TryResponse(card, ref protocol, Emv.Select(Convert.FromHexString(app.Aid)), out byte[] data, out ushort status))
+            byte[] select = Emv.Select(Convert.FromHexString(app.Aid));
+            if (!TryResponse(card, ref protocol, select, out byte[] data, out ushort status))
             {
                 throw CardReaderException.ReadFailed();
+            }
+
+            if (status == 0x6700 && select.Length > 5 && TryResponse(card, ref protocol, select[..^1], out byte[] retry, out ushort retryStatus))
+            {
+                data = retry;
+                status = retryStatus;
             }
 
             if (status is 0x6A82 or 0x6A81)
@@ -240,24 +305,65 @@ public sealed class PcscCardReaderBackend : ICardReaderBackend
     private static byte[]? TryDirectory(IntPtr card, ref uint protocol, byte[] name)
     {
         byte[] command = Emv.Select(name);
-        if (!TryResponse(card, ref protocol, command, out byte[] data, out ushort status))
+        if (!TryDirectoryResponse(card, ref protocol, command, out byte[] data, out ushort status, out CardReaderException? failure)
+            && (command.Length <= 5 || !TryDirectoryResponse(card, ref protocol, command[..^1], out data, out status, out failure)))
         {
-            throw CardReaderException.ReadFailed();
+            throw failure ?? CardReaderException.ReadFailed();
         }
 
         // Some contactless cards reject the expected-length byte. Ask again without it.
-        if (status == 0x6700 && command.Length > 5 && TryResponse(card, ref protocol, command[..^1], out byte[] retry, out ushort retryStatus))
+        if (status == 0x6700 && command.Length > 5
+            && TryDirectoryResponse(card, ref protocol, command[..^1], out byte[] retry, out ushort retryStatus, out _))
         {
             data = retry;
             status = retryStatus;
         }
 
-        if (status is 0x6A82 or 0x6A81 || status != 0x9000)
+        // Any other answer means this directory is not on the card. The caller tries the other one.
+        // A Windows failure was already thrown above, so a tap that the driver rejects is not hidden.
+        if (status != 0x9000)
         {
-            return status is 0x6A82 or 0x6A81 ? null : throw CardReaderException.ReadFailed();
+            return null;
         }
 
-        return Emv.DirectoryEntries(data).Count > 0 || Emv.DirectorySfi(data) is not null ? data : null;
+        try
+        {
+            return Emv.DirectoryEntries(data).Count > 0 || Emv.DirectorySfi(data) is not null ? data : null;
+        }
+        catch (EmvFormatException)
+        {
+            return null;
+        }
+    }
+
+    private static bool TryDirectoryResponse(
+        IntPtr card,
+        ref uint protocol,
+        byte[] command,
+        out byte[] data,
+        out ushort status,
+        out CardReaderException? failure)
+    {
+        try
+        {
+            failure = null;
+            if (TryResponse(card, ref protocol, command, out data, out status))
+            {
+                return true;
+            }
+
+            data = [];
+            status = 0;
+            failure = CardReaderException.ReadFailed();
+            return false;
+        }
+        catch (CardReaderException ex) when (ex.Code == "read_failed")
+        {
+            data = [];
+            status = 0;
+            failure = ex;
+            return false;
+        }
     }
 
     private static bool TryResponse(IntPtr card, ref uint protocol, byte[] command, out byte[] data, out ushort status)
