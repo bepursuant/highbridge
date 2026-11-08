@@ -27,7 +27,7 @@ highbridge lets an HTTPS web app start a document scan on the user's Windows PC 
 
 1. **Origin allowlist ("pairing"), the only user prompt.** Every API request must carry a browser `Origin`. Allowed origins are `https://…`, plus `http://localhost` and `http://127.0.0.1` for development (this can be turned off by policy). `null`, `file://` and requests with no Origin are rejected.
    - The first time a site calls `POST /v1/pair`, the tray app shows "Allow this website to use your scanners and card reader?". The dialog names both devices, the card fields that leave the machine (last four of the card number, expiry, cardholder name), and the stamp identity sentence. Approval version 3 is that wording.
-   - A yes is saved to `%APPDATA%\Highbridge\settings.json`. Sites are removed in the tray menu's "Approved websites" window.
+   - A yes is saved to `%APPDATA%\Highbridge\settings.json`. Sites are removed in the tray menu's "Approved websites" window. **Devices** (also opened by double-clicking the tray icon) lists the scanners and card readers Windows can see.
    - A no is remembered for 10 minutes so a site can't spam prompts. Only one prompt is shown at a time, and it times out after 2 minutes.
    - Admins can pre-approve origins (no prompt at all), or turn pairing off, in `policy.json`.
 2. **No per-scan prompt.** After pairing, `POST /v1/scans` starts scanning straight away. highbridge adds no dialog, and it turns off the driver's progress indicator (`CAP_INDICATORS = false`) unless the page asks for the driver UI (`showDriverUi`). This is sized for about 1,000 scans per user per day.

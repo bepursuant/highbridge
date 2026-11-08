@@ -96,6 +96,15 @@ public sealed class CardReadManager : IDisposable
             throw new JobRejectedException("duplicate_request_id", "A card read with this request id already exists.");
         }
 
+        _logger.LogInformation(
+            "Card read {JobId} started for {Origin} ({Trigger}): reader={Reader} interface={Interface} aid={Aid} waitMs={Wait}",
+            job.Id,
+            origin,
+            trigger,
+            options.ReaderId ?? "(any)",
+            options.Interface,
+            options.NormalizedAid ?? "(none)",
+            options.WaitForCardMs);
         _ = Task.Run(() => RunAsync(job));
         return job;
     }
@@ -190,7 +199,7 @@ public sealed class CardReadManager : IDisposable
         }
         catch (CardReaderException ex)
         {
-            _logger.LogWarning("Card read {JobId} failed: {Code}", job.Id, ex.Code);
+            _logger.LogWarning("Card read {JobId} failed: {Code} {Message}", job.Id, ex.Code, ex.Message);
             Complete(job, CardReadStatus.Failed, ex.Code, ex.Message);
         }
         catch (Exception ex)
@@ -214,6 +223,14 @@ public sealed class CardReadManager : IDisposable
     {
         if (job.Finish(status, _time.GetUtcNow(), result, code, message))
         {
+            _logger.LogInformation(
+                "Card read {JobId} finished: {Status} code={Code} reader={Reader} interface={Interface} aid={Aid}",
+                job.Id,
+                status,
+                code ?? "",
+                result?.Reader.Name ?? job.Options.ReaderId ?? "(any)",
+                (result?.Interface ?? job.Options.Interface).ToString(),
+                result?.Selected.Aid ?? job.Options.NormalizedAid ?? "(none)");
             JobFinished?.Invoke(job);
         }
     }

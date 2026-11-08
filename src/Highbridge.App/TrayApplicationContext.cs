@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Logging;
 using Highbridge.Cards;
@@ -9,6 +10,7 @@ using Highbridge.Jobs;
 using Highbridge.Pcsc;
 using Highbridge.Scanning;
 using Highbridge.Server;
+using Highbridge.Support;
 using Highbridge.Twain;
 
 namespace Highbridge.App;
@@ -27,6 +29,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly Icon _trayIcon;
     private readonly string _exePath = Environment.ProcessPath ?? Application.ExecutablePath;
     private ApprovedSitesForm? _sitesForm;
+    private DevicesForm? _devicesForm;
     private bool _disposed;
 
     public TrayApplicationContext(AppOptions options)
@@ -74,10 +77,24 @@ internal sealed class TrayApplicationContext : ApplicationContext
             Visible = true,
             ContextMenuStrip = BuildMenu(),
         };
-        _tray.DoubleClick += (_, _) => ShowApprovedSites();
+        _tray.DoubleClick += (_, _) => ShowDevices();
+        Application.ThreadException += (_, e) => _logger.LogError(e.Exception, "Unhandled UI exception");
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
+            if (e.ExceptionObject is Exception ex)
+            {
+                _logger.LogError(ex, "Unhandled exception");
+            }
+        };
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            _logger.LogError(e.Exception, "Unobserved task exception");
+            e.SetObserved();
+        };
 
         EnsureProtocolRegistration();
         StartServer();
+        LogStartup();
 
         _channel.Start(args =>
         {
@@ -94,6 +111,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         if (disposing && !_disposed)
         {
             _disposed = true;
+            _logger.LogInformation("highbridge stopping");
             _tray.Visible = false;
             _tray.Dispose();
             _trayIcon.Dispose();
@@ -119,6 +137,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         string readers = _options.UseMockScanner ? "mock card reader" : "PC/SC";
         menu.Items.Add(new ToolStripMenuItem($"highbridge {HighbridgeServer.AppVersion} - 127.0.0.1:{_runtime.Port} ({scanners}, {readers})") { Enabled = false });
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Devices...", null, (_, _) => ShowDevices());
         menu.Items.Add("Approved websites...", null, (_, _) => ShowApprovedSites());
 
         var autoStart = new ToolStripMenuItem("Start when I sign in") { Checked = WindowsRegistration.IsAutoStartEnabled(), CheckOnClick = true };
@@ -220,6 +239,68 @@ internal sealed class TrayApplicationContext : ApplicationContext
         {
             Notify("Scan failed", job.ErrorMessage ?? "The scanner reported an error.", ToolTipIcon.Error);
         }
+    }
+
+    private void LogStartup()
+    {
+        var process = Process.GetCurrentProcess();
+        _logger.LogInformation(
+            "highbridge {Version} started. pid={Pid} session={Session} bitness={Bits} machine={Machine} user={User} os={Os} runtime={Runtime} port={Port} scanners={Scanners} readers={Readers} cardReader={Policy} log={Log}",
+            HighbridgeServer.AppVersion,
+            process.Id,
+            process.SessionId,
+            Environment.Is64BitProcess ? "x64" : "x86",
+            Environment.MachineName,
+            Environment.UserName,
+            Environment.OSVersion.VersionString,
+            RuntimeInformation.FrameworkDescription,
+            _runtime.Port,
+            _runtime.Backend.Name,
+            _runtime.CardReader.Name,
+            _runtime.Policy.CardReaderEnabled ? "enabled" : "disabled",
+            _logProvider.FilePath);
+        _ = ListReadersAtStartup();
+    }
+
+    private async Task ListReadersAtStartup()
+    {
+        try
+        {
+            // Scanners stay unlisted until Devices is opened. Opening TWAIN at every sign-in can wake a driver.
+            await ListDevicesAsync("Card readers at startup", listScanners: false).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not list card readers at startup");
+        }
+    }
+
+    private async Task<SupportSnapshot> ListDevicesAsync(string title, bool listScanners = true)
+    {
+        var snapshot = await DeviceInventory.CollectAsync(
+            _runtime.Backend,
+            _runtime.CardReader,
+            HighbridgeServer.AppVersion,
+            _runtime.Port,
+            _runtime.Policy.CardReaderEnabled,
+            listScanners: listScanners).ConfigureAwait(false);
+        _logger.LogInformation("{Title}:{NewLine}{Report}", title, Environment.NewLine, SupportReport.Format(snapshot));
+        return snapshot;
+    }
+
+    private Task<SupportSnapshot> LoadDevicesAsync() => ListDevicesAsync("Devices");
+
+    private void ShowDevices()
+    {
+        if (_devicesForm is { IsDisposed: false })
+        {
+            _devicesForm.Activate();
+            _devicesForm.RefreshDevices();
+            return;
+        }
+
+        _devicesForm = new DevicesForm(LoadDevicesAsync, _logProvider.LogDirectory);
+        _devicesForm.Show();
     }
 
     private void ShowApprovedSites()

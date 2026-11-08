@@ -122,6 +122,19 @@ public sealed class ScanJobManager : IDisposable
             throw new JobRejectedException("duplicate_request_id", "A scan with this request id already exists.");
         }
 
+        _logger.LogInformation(
+            "Scan {JobId} started for {Origin} ({Trigger}): scanner={Scanner} dpi={Dpi} color={Color} source={Source} duplex={Duplex} driverUi={DriverUi} maxPages={MaxPages} barcodes={Barcodes}",
+            job.Id,
+            origin,
+            trigger,
+            options.ScannerId ?? "(default)",
+            options.Dpi,
+            options.ColorMode,
+            options.Source,
+            options.Duplex,
+            options.ShowDriverUi,
+            options.MaxPages,
+            options.Barcodes);
         _ = Task.Run(() => RunAsync(job));
         return job;
     }
@@ -314,6 +327,12 @@ public sealed class ScanJobManager : IDisposable
     {
         if (job.Finish(status, _time.GetUtcNow(), code, message))
         {
+            _logger.LogInformation(
+                "Scan {JobId} finished: {Status} code={Code} pages={Pages}",
+                job.Id,
+                status,
+                code ?? "",
+                job.Pages.Count);
             JobFinished?.Invoke(job);
         }
     }
