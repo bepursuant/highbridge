@@ -20,11 +20,19 @@ body { margin: 0; min-height: 100vh; display: flex; flex-direction: column; }
 code { font-family: "Cascadia Code", ui-monospace, monospace; font-size: 0.85em; background: #eef2ff; padding: 1px 5px; border-radius: 5px; }
 
 .topbar {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 14px clamp(16px, 4vw, 40px);
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 14px clamp(16px, 4vw, 40px) 0;
   background: var(--panel); border-bottom: 1px solid var(--line);
   position: sticky; top: 0; z-index: 2;
 }
+.topbar-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.tabs { display: flex; gap: 4px; }
+.tab {
+  background: transparent; color: var(--muted); border: 0; border-bottom: 2px solid transparent;
+  border-radius: 0; padding: 10px 14px 12px; font-weight: 600;
+}
+.tab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+.tab:hover:not([aria-selected="true"]) { color: var(--ink); }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 1.1rem; letter-spacing: -0.01em; }
 .logo { width: 32px; height: 32px; display: block; }
 .tag { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); background: #eff6ff; padding: 2px 8px; border-radius: 999px; }
@@ -36,12 +44,15 @@ code { font-family: "Cascadia Code", ui-monospace, monospace; font-size: 0.85em;
 .pill-off { color: var(--off); background: #fef2f2; border-color: #fecaca; }
 .pill-unknown { color: var(--muted); }
 
+main { flex: 1; display: flex; flex-direction: column; }
 .layout {
   flex: 1; width: 100%; max-width: 1200px; margin: 0 auto;
   display: grid; grid-template-columns: minmax(300px, 400px) 1fr; gap: 24px;
   padding: 24px clamp(16px, 4vw, 40px);
 }
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 24px; box-shadow: 0 1px 2px rgb(15 23 42 / 0.04); }
+.layout[hidden] { display: none; }
+#view-card.layout { grid-template-columns: minmax(280px, 340px) 1fr; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 24px; box-shadow: 0 1px 2px rgb(15 23 42 / 0.04); min-width: 0; }
 h1 { font-size: 1.35rem; margin: 0 0 6px; letter-spacing: -0.02em; }
 h2 { font-size: 1.1rem; margin: 0; }
 .lede { color: var(--muted); margin: 0 0 20px; line-height: 1.5; font-size: 0.95rem; }
@@ -50,10 +61,11 @@ form { display: flex; flex-direction: column; gap: 16px; }
 .field { display: flex; flex-direction: column; gap: 6px; border: 0; padding: 0; margin: 0; min-width: 0; }
 .field > span, .field > legend { font-size: 0.8rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; padding: 0; margin-bottom: 6px; }
 .row { display: flex; gap: 8px; }
-.row select { flex: 1; min-width: 0; }
+.row select, .row input { flex: 1; min-width: 0; width: auto; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-select { font: inherit; padding: 9px 10px; border-radius: 10px; border: 1px solid var(--line); background: #fff; color: inherit; }
-select:disabled { color: var(--muted); background: #f8fafc; }
+select, input[type="text"], input[type="number"] { font: inherit; padding: 9px 10px; border-radius: 10px; border: 1px solid var(--line); background: #fff; color: inherit; width: 100%; }
+select:disabled, input:disabled { color: var(--muted); background: #f8fafc; }
+input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .segmented { flex-direction: row; flex-wrap: wrap; gap: 0; }
 .segmented legend { width: 100%; }
@@ -95,6 +107,7 @@ button:disabled { cursor: progress; opacity: 0.7; }
 .results-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .empty { flex: 1; display: grid; place-content: center; justify-items: center; gap: 12px; color: var(--muted); border: 2px dashed var(--line); border-radius: 12px; padding: 40px 16px; text-align: center; }
 .empty-art { width: 64px; height: 80px; border-radius: 6px; border: 2px solid #cbd5e1; background: repeating-linear-gradient(180deg, transparent 0 14px, #e2e8f0 14px 17px); background-clip: content-box; padding: 18px 10px; }
+.empty-art.card { width: 96px; height: 60px; border-radius: 8px; padding: 0; background: linear-gradient(145deg, #dbeafe, #eff6ff); }
 .empty[hidden] { display: none; }
 .pages { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 16px; }
 .page { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #f8fafc; display: flex; flex-direction: column; }
@@ -121,12 +134,31 @@ button:disabled { cursor: progress; opacity: 0.7; }
 .barcodes th { text-align: left; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--line); }
 .barcodes td { padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
 .barcodes td:nth-child(3) { font-family: "Cascadia Code", ui-monospace, monospace; word-break: break-all; }
+#card-details { overflow-x: auto; font-size: 0.78rem; }
+#card-details td, #card-details th { white-space: nowrap; padding: 6px 6px; }
+#card-details td:first-child { font-family: "Cascadia Code", ui-monospace, monospace; }
+#card-details td:nth-child(3) { font-family: inherit; word-break: normal; }
+#card-details tr.selected td { font-weight: 400; }
+.barcodes tr.selected td { background: #eff6ff; font-weight: 600; }
 .barcodes[hidden] { display: none; }
+
+.summary { margin: -8px 0 16px; color: var(--muted); font-size: 0.9rem; overflow-wrap: anywhere; }
+.summary[hidden] { display: none; }
+.card-face {
+  margin: 12px 12px 0; aspect-ratio: 1.586 / 1; border-radius: 12px; padding: 14px;
+  display: flex; flex-direction: column; justify-content: space-between; gap: 8px;
+  background: linear-gradient(145deg, #1e3a8a, #2563eb); color: #fff;
+}
+.card-app:not(.selected) .card-face { background: linear-gradient(145deg, #334155, #64748b); }
+.card-chip { align-self: flex-start; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; background: rgb(255 255 255 / 0.18); padding: 2px 8px; border-radius: 999px; }
+.card-pan { font-family: "Cascadia Code", ui-monospace, monospace; letter-spacing: 0.14em; font-size: 1.05rem; }
+.card-row { display: flex; justify-content: space-between; gap: 8px; font-size: 0.85rem; }
+.card-app .meta .aid { font-family: "Cascadia Code", ui-monospace, monospace; font-size: 0.75rem; }
 
 .foot { text-align: center; color: var(--muted); font-size: 0.8rem; padding: 16px; }
 
 @media (max-width: 820px) {
-  .layout { grid-template-columns: 1fr; }
+  .layout, #view-card.layout { grid-template-columns: 1fr; }
   .results { min-height: 280px; }
 }
 @media (max-width: 420px) {

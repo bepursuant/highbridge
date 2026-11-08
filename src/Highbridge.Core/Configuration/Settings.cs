@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Highbridge.Provenance;
 
 namespace Highbridge.Configuration;
@@ -15,10 +16,25 @@ public sealed class PairedOrigin
     public DateTimeOffset PairedAt { get; set; }
 
     /// <summary>
-    /// Which approval wording the user accepted. 2 and later tell the user that stamped scans send
-    /// their Windows user name and computer name to the site; missing means an older approval.
+    /// Which approval wording the user accepted. Version 2 tells the user that stamped scans send
+    /// their Windows user name and computer name. Version 3 also tells them a card read sends the
+    /// last four digits of the card number, the expiry, and the cardholder name. Missing means an
+    /// older approval.
     /// </summary>
     public int? ApprovalVersion { get; set; }
+}
+
+[JsonConverter(typeof(CamelCaseEnumConverter<CardReaderMode>))]
+public enum CardReaderMode
+{
+    Enabled,
+    Disabled,
+}
+
+/// <summary><c>cardReader</c> in policy.json.</summary>
+public sealed class CardReaderPolicy
+{
+    public CardReaderMode Mode { get; set; } = CardReaderMode.Enabled;
 }
 
 /// <summary>
@@ -27,7 +43,9 @@ public sealed class PairedOrigin
 /// </summary>
 public sealed class HighbridgePolicy
 {
-    /// <summary>Origins that are treated as paired without prompting.</summary>
+    /// <summary>
+    /// Origins that are treated as paired without prompting. A listed origin may scan and read cards.
+    /// </summary>
     public List<string> AllowedOrigins { get; set; } = [];
 
     /// <summary>When false, only <see cref="AllowedOrigins"/> may use highbridge.</summary>
@@ -38,6 +56,14 @@ public sealed class HighbridgePolicy
 
     /// <summary>Provenance stamp rules; for example <c>{"mode": "required"}</c> stamps every scan.</summary>
     public ProvenanceStampPolicy? ProvenanceStamp { get; set; }
+
+    /// <summary>
+    /// Card reader switch. <c>{"mode": "disabled"}</c> makes card routes fail with
+    /// <c>card_reader_disabled</c> and leaves scanning alone. Omitted means enabled.
+    /// </summary>
+    public CardReaderPolicy? CardReader { get; set; }
+
+    public bool CardReaderEnabled => CardReader is not { Mode: CardReaderMode.Disabled };
 
     public static HighbridgePolicy Load(string? path)
     {

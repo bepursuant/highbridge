@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Highbridge.Barcodes;
+using Highbridge.Cards;
 using Highbridge.Configuration;
 using Highbridge.Consent;
 using Highbridge.Jobs;
@@ -23,6 +24,7 @@ public sealed class HighbridgeRuntime : IDisposable
     /// <param name="port">Only the dev host and tests pass this, to run several hosts side by side.</param>
     public HighbridgeRuntime(
         IScannerBackend backend,
+        ICardReaderBackend cardReader,
         IConsentService consent,
         SettingsStore settings,
         HighbridgePolicy policy,
@@ -34,6 +36,7 @@ public sealed class HighbridgeRuntime : IDisposable
     {
         loggerFactory ??= NullLoggerFactory.Instance;
         Backend = backend;
+        CardReader = cardReader;
         Consent = consent;
         Settings = settings;
         Policy = policy;
@@ -46,10 +49,13 @@ public sealed class HighbridgeRuntime : IDisposable
             logger: loggerFactory.CreateLogger<ScanJobManager>(),
             provenance: new ProvenanceStamping(policy.ProvenanceStamp, identity),
             barcodeWorker: barcodeWorker);
+        CardReads = new CardReadManager(cardReader, Origins, policy, time, logger: loggerFactory.CreateLogger<CardReadManager>());
         Logger = loggerFactory.CreateLogger<HighbridgeRuntime>();
     }
 
     public IScannerBackend Backend { get; }
+
+    public ICardReaderBackend CardReader { get; }
 
     public IConsentService Consent { get; }
 
@@ -60,6 +66,8 @@ public sealed class HighbridgeRuntime : IDisposable
     public OriginRegistry Origins { get; }
 
     public ScanJobManager Jobs { get; }
+
+    public CardReadManager CardReads { get; }
 
     public int Port { get; }
 
@@ -83,31 +91,48 @@ public sealed class HighbridgeRuntime : IDisposable
         // were already paired through the HTTP API (where the browser vouches for Origin), the
         // scanner waits until that origin claims the job over HTTP, and the result can only be
         // collected by that origin using the unguessable request id.
+        if (command.Action == ProtocolAction.ReadCard && !Policy.CardReaderEnabled)
+        {
+            Logger.LogWarning("Rejected highbridge:// card read because the reader is disabled by policy");
+            return new ProtocolResult(ProtocolOutcome.Rejected, CardReadManager.DisabledMessage);
+        }
+
         if (!Origins.TryNormalize(command.Origin, out string origin) || !Origins.IsPaired(origin))
         {
-            Logger.LogWarning("Rejected highbridge:// scan for unpaired origin {Origin}", command.Origin);
+            Logger.LogWarning("Rejected highbridge:// {Action} for unpaired origin {Origin}", command.Action, command.Origin);
             return new ProtocolResult(ProtocolOutcome.OriginNotPaired, command.Origin);
         }
 
         try
         {
+            if (command.Action == ProtocolAction.ReadCard)
+            {
+                var read = CardReads.Start(origin, command.CardRead!, CardReadTrigger.ProtocolUrl, command.RequestId);
+                return new ProtocolResult(ProtocolOutcome.CardReadStarted, read.Id);
+            }
+
             var job = Jobs.Start(origin, command.Options, ScanTrigger.ProtocolUrl, command.RequestId);
             return new ProtocolResult(ProtocolOutcome.ScanStarted, job.Id);
         }
         catch (JobRejectedException ex)
         {
-            Logger.LogWarning("Rejected highbridge:// scan: {Code}", ex.Code);
+            Logger.LogWarning("Rejected highbridge:// {Action}: {Code}", command.Action, ex.Code);
             return new ProtocolResult(ProtocolOutcome.Rejected, ex.Message);
         }
     }
 
-    public void Dispose() => Jobs.Dispose();
+    public void Dispose()
+    {
+        Jobs.Dispose();
+        CardReads.Dispose();
+    }
 }
 
 public enum ProtocolOutcome
 {
     Launched,
     ScanStarted,
+    CardReadStarted,
     OriginNotPaired,
     Rejected,
     Invalid,

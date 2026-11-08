@@ -3,21 +3,28 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>highbridge demo - scan from your browser</title>
+  <title>highbridge demo</title>
   <link rel="icon" href="logo.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">
-      <img class="logo" src="logo.svg" alt="" width="32" height="32" />
-      <span>highbridge</span>
-      <span class="tag">demo</span>
+    <div class="topbar-row">
+      <div class="brand">
+        <img class="logo" src="logo.svg" alt="" width="32" height="32" />
+        <span>highbridge</span>
+        <span class="tag">demo</span>
+      </div>
+      <div id="connection" class="pill pill-unknown" role="status" aria-live="polite">Checking…</div>
     </div>
-    <div id="connection" class="pill pill-unknown" role="status" aria-live="polite">Checking…</div>
+    <div class="tabs" role="tablist" aria-label="Demo">
+      <button type="button" class="tab" id="tab-scan" role="tab" aria-selected="true" aria-controls="view-scan">Scan</button>
+      <button type="button" class="tab" id="tab-card" role="tab" aria-selected="false" aria-controls="view-card" tabindex="-1">Card reader</button>
+    </div>
   </header>
 
-  <main class="layout">
+  <main>
+  <div id="view-scan" class="layout" role="tabpanel" aria-labelledby="tab-scan">
     <section class="panel controls" aria-labelledby="scan-heading">
       <h1 id="scan-heading">Scan a document</h1>
       <p class="lede">This page asks the highbridge app on your computer to scan with your TWAIN scanner and sends the pages back here. Nothing is uploaded anywhere.</p>
@@ -106,9 +113,93 @@
         </table>
       </div>
     </section>
+  </div>
+
+  <div id="view-card" class="layout" role="tabpanel" aria-labelledby="tab-card" hidden>
+    <section class="panel controls" aria-labelledby="card-heading">
+      <h1 id="card-heading">Read a card</h1>
+      <p class="lede">This page asks the highbridge app on your computer to read a payment card. It returns the applications on the card and, for the one it selected, the last four digits, the expiry, and the cardholder name. The full number stays on this computer.</p>
+
+      <form id="card-form" novalidate>
+        <label class="field">
+          <span>Reader</span>
+          <div class="row">
+            <select id="reader" name="readerId" disabled>
+              <option value="">Any slot</option>
+            </select>
+            <button type="button" id="card-connect" class="secondary">Connect</button>
+          </div>
+        </label>
+
+        <fieldset class="field segmented">
+          <legend>Interface</legend>
+          <label><input type="radio" name="interface" value="auto" checked /><span>Auto</span></label>
+          <label><input type="radio" name="interface" value="contact" /><span>Contact</span></label>
+          <label><input type="radio" name="interface" value="contactless" /><span>Contactless</span></label>
+        </fieldset>
+        <p class="hint">Contact prefers the chip slot and asks for the contact directory (PSE) first. Contactless prefers the tap slot and asks for the contactless directory (PPSE) first. Auto uses whichever slot has a card. If that directory is not on the card, the other one is tried. Windows lists the two slots as two readers; a card in either slot of the same reader is accepted.</p>
+
+        <label class="field">
+          <span>Application (AID)</span>
+          <input type="text" name="aid" spellcheck="false" autocomplete="off" placeholder="Highest priority" />
+        </label>
+        <p class="hint">Optional. 5–16 bytes of hex; spaces are allowed. Blank selects the highest-priority application on the card.</p>
+
+        <label class="field">
+          <span>Wait for a card (ms)</span>
+          <input type="number" name="waitForCardMs" min="0" max="120000" step="1000" value="30000" />
+        </label>
+        <p class="hint">How long to wait for a card, from 0 to 120000 milliseconds. 0 fails at once if the reader is empty.</p>
+
+        <button type="submit" id="read-card" class="primary">Read card</button>
+        <p id="card-progress" class="progress" aria-live="polite"></p>
+      </form>
+
+      <div id="card-error" class="notice error" role="alert" hidden></div>
+
+      <details class="howto">
+        <summary>How this works</summary>
+        <ol>
+          <li>The page talks to highbridge at <code>http://127.0.0.1:47116</code>. Your browser may ask to let this site reach apps on your device. Allow it.</li>
+          <li>The first time, highbridge asks you to approve this website. The prompt names the last four digits, the expiry, and the cardholder name. After that, Read card starts straight away.</li>
+          <li>The page only sends the reader, the interface, an optional application id, and how long to wait. highbridge chooses every card command. Nothing else from the card is sent back.</li>
+        </ol>
+      </details>
+    </section>
+
+    <section class="panel results" aria-labelledby="card-results-heading">
+      <div class="results-head">
+        <h2 id="card-results-heading">Card</h2>
+        <button type="button" id="card-clear" class="ghost" hidden>Clear</button>
+      </div>
+      <p id="card-summary" class="summary" hidden></p>
+      <div id="card-empty" class="empty">
+        <div class="empty-art card" aria-hidden="true"></div>
+        <p>Card details will appear here.</p>
+      </div>
+      <ol id="card-apps" class="pages"></ol>
+      <div id="card-details" class="barcodes" hidden>
+        <h2>Fields</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Application</th>
+              <th>Label</th>
+              <th>Preferred name</th>
+              <th>Priority</th>
+              <th>Last four</th>
+              <th>Expiry</th>
+              <th>Cardholder</th>
+            </tr>
+          </thead>
+          <tbody id="card-rows"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
   </main>
 
-  <footer class="foot">highbridge demo. The scanner app stays on this computer; this page only talks to it.</footer>
+  <footer class="foot">highbridge demo. The scanner and card reader stay on this computer; this page only talks to them.</footer>
 
   <script type="module" src="app.js"></script>
 </body>

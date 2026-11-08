@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Highbridge.Barcodes;
+using Highbridge.Cards;
 using Highbridge.Configuration;
 using Highbridge.Consent;
 using Highbridge.Imaging;
@@ -358,6 +359,7 @@ public sealed class ApiTests : IAsyncLifetime
         // every rotation is searched and the page comes back Partial.
         _runtime = new HighbridgeRuntime(
             new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.FromMilliseconds(1), FeederSheets = 2 }),
+            new MockCardReaderBackend(),
             Consent,
             new SettingsStore(path: null),
             Policy,

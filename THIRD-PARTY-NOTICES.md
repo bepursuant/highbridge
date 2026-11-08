@@ -14,6 +14,7 @@ before adding a package to `Directory.Packages.props` or a tool to `.config/dotn
 | Microsoft.Extensions.Logging.Abstractions | 10.0.14 | MIT | https://github.com/dotnet/runtime |
 | NTwain | 3.7.6 | MIT | https://github.com/soukoku/ntwain |
 | ZXing.Net | 0.16.11 | Apache-2.0 | https://github.com/micjahn/ZXing.Net |
+| Great.EmvTags | 2.1.0 | MIT | https://github.com/bepursuant/Great.EmvTags |
 
 The provenance stamp (PNG decoding and encoding, the band font, SHA-256) adds no third-party
 component: it is highbridge's own code on top of the .NET runtime's zlib and cryptography.

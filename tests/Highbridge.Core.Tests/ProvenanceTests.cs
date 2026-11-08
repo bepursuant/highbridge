@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Highbridge.Cards;
 using Highbridge.Configuration;
 using Highbridge.Consent;
 using Highbridge.Imaging;
@@ -403,6 +404,7 @@ public class ProvenanceJobTests
     private static HighbridgeRuntime Runtime(HighbridgePolicy? policy = null, TimeProvider? time = null, IScannerBackend? backend = null) =>
         new(
             backend ?? TestRuntime.FastMock(),
+            new MockCardReaderBackend(),
             new FixedConsentService(allow: true),
             new SettingsStore(path: null),
             policy ?? new HighbridgePolicy(),

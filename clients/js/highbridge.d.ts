@@ -86,11 +86,17 @@ export interface Barcode {
   points: Array<{ x: number; y: number }>;
 }
 
+export interface DeviceStatus {
+  kind: 'scanner' | 'cardReader' | string;
+  backend: string;
+}
+
 export interface AppStatus {
   app: 'highbridge';
   version: string;
   apiVersion: number;
   backend: 'twain' | 'mock' | string;
+  devices?: DeviceStatus[];
   paired: boolean;
   pairingAllowed: boolean;
 }
@@ -141,6 +147,50 @@ export interface ScanResult {
   barcodes?: Barcode[];
 }
 
+export type CardInterface = 'auto' | 'contact' | 'contactless';
+
+export interface CardReadOptions {
+  readerId?: string;
+  interface?: CardInterface;
+  /** Hex AID, 5–16 bytes. Default: the highest priority application that selects. */
+  aid?: string;
+  /** How long to wait for a card, 0–120000. Default 30000. */
+  waitForCardMs?: number;
+}
+
+export interface CardReaderInfo {
+  id: string;
+  name: string;
+  backend: string;
+}
+
+export interface CardApplication {
+  aid: string;
+  label?: string;
+  preferredName?: string;
+  priority?: number;
+}
+
+export interface CardSelection {
+  aid: string;
+  label?: string;
+  preferredName?: string;
+  priority?: number;
+  /** Four digits. Never the full card number. */
+  panLast4: string;
+  /** YYYY-MM. */
+  expiry: string;
+  cardholderName?: string;
+}
+
+export interface CardReadResult {
+  id: string;
+  reader: { id: string; name: string };
+  interface: 'contact' | 'contactless';
+  applications: CardApplication[];
+  selected: CardSelection;
+}
+
 export interface HighbridgeClientOptions {
   /** Only for testing against a dev host; highbridge itself always uses 47116. */
   port?: number;
@@ -175,9 +225,13 @@ export declare class HighbridgeClient {
   connect(options?: { launch?: boolean }): Promise<AppStatus>;
   listScanners(): Promise<ScannerInfo[]>;
   scan(options?: ScanOptions, hooks?: { onProgress?: (job: ScanJob) => void; signal?: AbortSignal }): Promise<ScanResult>;
+  listCardReaders(): Promise<CardReaderInfo[]>;
+  readCard(options?: CardReadOptions, hooks?: { onProgress?: (job: object) => void; signal?: AbortSignal }): Promise<CardReadResult>;
 }
 
 export declare function buildScanUrl(origin: string, requestId: string, options?: ScanOptions): string;
+
+export declare function buildReadCardUrl(origin: string, requestId: string, options?: CardReadOptions): string;
 
 /**
  * Maps barcode points onto the image the page downloaded. Detection runs before the stamp, so a

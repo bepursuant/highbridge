@@ -1,6 +1,6 @@
 # highbridge — architecture plan (POC)
 
-highbridge lets an HTTPS web app start a document scan on the user's Windows PC (TWAIN scanner) and get the pages back in JavaScript. It is proprietary software of Pursuant Solutions (all rights reserved; Pursuant may distribute it free or paid).
+highbridge lets an HTTPS web app start a document scan on the user's Windows PC (TWAIN scanner) or a payment-card read (PC/SC) and get the result back in JavaScript. It is proprietary software of Pursuant Solutions (all rights reserved; Pursuant may distribute it free or paid).
 
 ## 1. Decisions
 
@@ -17,7 +17,7 @@ highbridge lets an HTTPS web app start a document scan on the user's Windows PC 
 | Result transport | **Local HTTP API on `http://127.0.0.1:47116`** (Kestrel minimal API) with JSON and polling. Pages are returned as image downloads. | Browsers treat `127.0.0.1` as potentially trustworthy, so it is not blocked as mixed content. HTTP is simpler than WebSocket and is covered by the Local Network Access permission everywhere. |
 | Port | **Always 47116.** Not configurable in settings or policy, and no fallback ports. If the port is taken, the app says so and the client reports `not_running`. | One well-known endpoint keeps the client simple. Without terminal-server support, there is one instance per machine in practice. |
 | Output format | **PNG only** for the POC. `ScanOptions.Format` (`OutputFormat` enum, `format` in the API and `highbridge://`) is already plumbed through; unknown values are rejected as `invalid_options`. | Adding PDF later means: add `OutputFormat.Pdf`, accept it in `OutputFormats.TryParse`, and add a branch to the encoders in `MockScannerBackend` and `TwainScan.Encode` (plus memory transfers in `TwainScan.FinishMemoryPage`). A multipage PDF would be assembled once all pages are in (one result instead of N pages), using an MIT/Apache writer such as PdfSharp 6 (MIT). |
-| `highbridge://` role | **Launch + start scan only; it never carries results.** `highbridge://launch` starts the app. `highbridge://scan?v=1&origin=…&request=<id>&dpi=…` starts the app and queues a scan under a client-chosen random id. The page then collects the result over the HTTP API, where the `Origin` header *is* verifiable. | A protocol launch has no trustworthy caller identity, so any page or email could fire it. Results are released only to a page whose real `Origin` matches and which knows the 128-bit request id. A spoofed launch therefore yields nothing. |
+| `highbridge://` role | **Launch + start a scan or card read; it never carries results.** `highbridge://launch` starts the app. `highbridge://scan?v=1&origin=…&request=<id>&dpi=…` queues a scan, and `highbridge://read-card?…` queues a card read, each under a client-chosen random id. The page then collects the result over the HTTP API, where the `Origin` header *is* verifiable. | A protocol launch has no trustworthy caller identity, so any page or email could fire it. Results are released only to a page whose real `Origin` matches and which knows the 128-bit request id. A spoofed launch therefore yields nothing. |
 | Protocol registration | `HKCU\Software\Classes\highbridge` (`URL Protocol`, `shell\open\command = "…\Highbridge.exe" "%1"`), written by the MSI. `Highbridge.exe --register` / `--unregister` and a first-run self-check write the same keys for portable use. Single instance: a second launch forwards its URL to the running instance over a current-user-only named pipe. | Per-user, no admin rights needed. |
 | Installer | **Per-user MSI only, built with WiX Toolset 5.0.2** (staying on 5.x). Sources: `installer/Highbridge.wxs` (package), `installer/Dialogs.wxs` (screens), `installer/License.rtf` (license text); built by `scripts/build-msi.ps1`. Installs to `%LOCALAPPDATA%\Programs\Highbridge` with no elevation prompt; registers the protocol handler and sign-in auto-start in HKCU, adds a Start menu shortcut, and starts the app. Screens: a runtime check that appears only when an x86 runtime is missing (each runtime shown as Missing/Installed, a Download button per missing one that opens the exact x86 installer URL, and **Check again**, which reopens the installer so it re-detects and continues); the license agreement with an accept box; progress; finished. Running it again offers Repair; uninstall is via Settings > Apps. Silent/basic installs skip the screens, and a missing runtime blocks them with a message naming both direct links. Upgrades (also same-version rebuilds) stop the running app first (`Highbridge.exe --exit`) and re-enable sign-in auto-start. Signing: `signtool` signs `Highbridge.exe` and the MSI when a certificate is given (thumbprint or PFX via parameters or `HIGHBRIDGE_SIGN_*` variables). No bootstrapper `.exe`. | WiX 5 is MS-RL with no Open Source Maintenance Fee (v6+ requires the fee from revenue-generating users). MS-RL applies to WiX's own source, not to MSIs built with it. The screens are our own authoring rather than the WiX UI extension, whose license dialogs need a WiX custom-action DLL inside the MSI; so the MSI still contains no WiX code. A dialog button can only run custom actions, not the standard AppSearch, hence "Check again" relaunches `msiexec` (no script or DLL custom action). The runtimes themselves are per-machine Microsoft installers, so they need admin once; highbridge does not. Inno Setup (no MSI, commercial license requested) and Velopack (own `Setup.exe` and updater) don't fit an MSI requirement. |
 | Policy | `%ProgramData%\Highbridge\policy.json` only. **No GPO/ADMX.** | Agreed. Admins can push the file with any deployment tool. |
@@ -26,14 +26,14 @@ highbridge lets an HTTPS web app start a document scan on the user's Windows PC 
 ## 2. Security model
 
 1. **Origin allowlist ("pairing"), the only user prompt.** Every API request must carry a browser `Origin`. Allowed origins are `https://…`, plus `http://localhost` and `http://127.0.0.1` for development (this can be turned off by policy). `null`, `file://` and requests with no Origin are rejected.
-   - The first time a site calls `POST /v1/pair`, the tray app shows "Allow *https://app.example.com* to use your scanners?". The dialog says that the site will then be able to scan whenever it asks.
+   - The first time a site calls `POST /v1/pair`, the tray app shows "Allow this website to use your scanners and card reader?". The dialog names both devices, the card fields that leave the machine (last four of the card number, expiry, cardholder name), and the stamp identity sentence. Approval version 3 is that wording.
    - A yes is saved to `%APPDATA%\Highbridge\settings.json`. Sites are removed in the tray menu's "Approved websites" window.
    - A no is remembered for 10 minutes so a site can't spam prompts. Only one prompt is shown at a time, and it times out after 2 minutes.
    - Admins can pre-approve origins (no prompt at all), or turn pairing off, in `policy.json`.
 2. **No per-scan prompt.** After pairing, `POST /v1/scans` starts scanning straight away. highbridge adds no dialog, and it turns off the driver's progress indicator (`CAP_INDICATORS = false`) unless the page asks for the driver UI (`showDriverUi`). This is sized for about 1,000 scans per user per day.
-3. **Protocol-launched scans need a claim.** A scan started from a `highbridge://scan` link (paired origins only; it never triggers pairing) is queued but does **not** move paper until the named origin polls `GET /v1/scans/{request id}` over HTTP, where the browser's `Origin` is verifiable. If no claim arrives within 30 seconds, the job ends as `canceled` with code `not_claimed`. Without the per-scan prompt, this is what stops a forged link from a third-party page or email from running the scanner for a paired site. The JS client claims automatically because it polls immediately.
-4. **Job binding.** A scan job belongs to the origin that created (or claimed) it. Other origins get 404. Jobs and pages live only in memory and expire after 10 minutes or on `DELETE`.
-5. **Transport hardening.** The server binds to loopback only. It checks the `Host` header (`127.0.0.1|localhost|[::1]:port`) to block DNS rebinding. CORS is reflected per request for valid origins (no `*`), with no credentials. It answers legacy PNA preflights harmlessly. One scan runs at a time.
+3. **Protocol-launched jobs need a claim.** A scan started from a `highbridge://scan` link, or a card read started from `highbridge://read-card` (paired origins only; a link never triggers pairing), is queued but does **not** move paper or touch the reader until the named origin polls the job over HTTP, where the browser's `Origin` is verifiable. If no claim arrives within 30 seconds, the job ends as `canceled` with code `not_claimed`. Without a per-job prompt, this is what stops a forged link from a third-party page or email from running the scanner or the card reader for a paired site. The JS client claims automatically because it polls immediately. A card read also requires approval version 3.
+4. **Job binding.** A scan or card-read job belongs to the origin that created (or claimed) it. Other origins get 404. Jobs and pages live only in memory and expire after 10 minutes or on `DELETE`.
+5. **Transport hardening.** The server binds to loopback only. It checks the `Host` header (`127.0.0.1|localhost|[::1]:port`) to block DNS rebinding. CORS is reflected per request for valid origins (no `*`), with no credentials. It answers legacy PNA preflights harmlessly. One scan runs at a time, and one card read runs at a time, on separate locks.
 6. **Out of scope.** Malicious local processes: they can already reach the scanner directly. Fingerprinting: a non-paired *valid* origin can learn that highbridge is installed via `/v1/status`, but only after the browser's Local Network Access prompt is granted.
 
 ## 3. Browser constraints (verified Oct 2026)
@@ -54,15 +54,19 @@ Steady state for a paired site on a machine where the LNA permission is granted:
 
 | Method & path | Who | Purpose |
 |---|---|---|
-| `GET /v1/status` | any valid origin | `{app, version, apiVersion, backend, paired, pairingAllowed}` |
+| `GET /v1/status` | any valid origin | `{app, version, apiVersion, backend, devices, paired, pairingAllowed}` |
 | `POST /v1/pair` | any valid origin | Shows the pairing prompt; returns `{paired}` |
 | `GET /v1/scanners` | paired | List sources |
 | `POST /v1/scans` | paired | `{scannerId?, dpi, colorMode, duplex, source, showDriverUi, maxPages, format: "png", stamp?: {position}, barcodes?, barcodeFormats?}` → `202 {id, status, format, stamp?, pagesScanned, …}` |
 | `GET /v1/scans/{id}` | job owner | Status (`queued`, `scanning`, `completed`, `failed`, `canceled`) plus page list, and barcodes when requested. Also claims a protocol-launched job |
 | `GET /v1/scans/{id}/pages/{n}` | job owner | `image/png` |
 | `DELETE /v1/scans/{id}` | job owner | Discard |
+| `GET /v1/card-readers` | current approval | `{readers: [{id, name, backend}]}` |
+| `POST /v1/card-reads` | current approval | `{readerId?, interface, aid?, waitForCardMs?}` → `202` |
+| `GET /v1/card-reads/{id}` | job owner | Status, and the allowlisted card fields when completed. Claims a protocol job |
+| `DELETE /v1/card-reads/{id}` | job owner | Discard |
 
-JS client (`clients/js/highbridge.js`, an ES module with no dependencies): `status()`, `pair()`, `listScanners()`, and `scan(options)`. If the app is not reachable, `scan` falls back to `highbridge://scan` and polls by request id (which claims the job).
+JS client (`clients/js/highbridge.js`, an ES module with no dependencies): `status()`, `pair()`, `listScanners()`, `scan(options)`, `listCardReaders()`, and `readCard(options)`. If the app is not reachable, `scan` falls back to `highbridge://scan` and `readCard` falls back to `highbridge://read-card`. Both poll by request id, which claims the job.
 
 ### Barcode recognition
 
@@ -84,7 +88,7 @@ A scan of several pages overlaps this with the next sheet, so the wait after the
 
 ## 5. Repository layout
 
-`src/Highbridge.Core` (models, URI parser, origin policy, jobs, settings, mock scanner with built-in PNG encoder) · `src/Highbridge.Server` (Kestrel API) · `src/Highbridge.Twain` (NTwain backend) · `src/Highbridge.App` (Windows tray app, dialogs, registry) · `src/Highbridge.DevHost` (cross-platform headless host with the mock scanner) · `docs/` (static demo page, also the GitHub Pages root) + `samples/Highbridge.SampleSite` (local static host) · `clients/js` · `installer/` (WiX source) · `branding/` (logo SVGs, `highbridge.ico`, icon build script) · `scripts/` (tests, MSI build, `test-twain-wine.sh`) · `tests/*` (unit/API tests; `tests/twain-wine`: fake TWAIN source and probe for Wine).
+`src/Highbridge.Core` (models, URI parser, origin policy, jobs, settings, mock scanner and mock card reader) · `src/Highbridge.Server` (Kestrel API) · `src/Highbridge.Twain` (NTwain backend) · `src/Highbridge.Pcsc` (winscard P/Invoke) · `src/Highbridge.App` (Windows tray app, dialogs, registry) · `src/Highbridge.DevHost` (cross-platform headless host with the mock scanner and mock card reader) · `docs/` (static demo page, also the GitHub Pages root) + `samples/Highbridge.SampleSite` (local static host) · `clients/js` · `installer/` (WiX source) · `branding/` (logo SVGs, `highbridge.ico`, icon build script) · `scripts/` (tests, MSI build, `test-twain-wine.sh`) · `tests/*` (unit/API tests; `tests/twain-wine`: fake TWAIN source and probe for Wine).
 
 ## 6. Dependencies and licenses
 
@@ -95,6 +99,7 @@ Rule: nothing shipped may be GPL, LGPL, AGPL or "non-commercial", and no build t
 | .NET 10 runtime, ASP.NET Core, Windows Desktop (WinForms/WPF, System.Drawing) | all | MIT | Not bundled: the user installs Microsoft's x86 runtimes (framework-dependent publish). |
 | NTwain 3.7.6 | Highbridge.Twain | MIT | Pin ≥3.7. Earlier (≤3.5.x) NuGet metadata pointed to an external license file; do not use them. |
 | ZXing.Net 0.16.11 | Highbridge.Core | Apache-2.0 | Barcode detection. The core package only: no bindings, no native code. `lib/net9.0/zxing.dll` has no dependencies. |
+| Great.EmvTags 2.1.0 | Highbridge.Core | MIT | EMV TLV and PDOL parsing for card reads. highbridge still maps the allowlist (last four, expiry, cardholder name) and does not return the raw tags. |
 | TWAIN DSM (`TWAINDSM.dll`) | runtime, system | LGPL-2.1 | **Not redistributed**; installed by scanner drivers. |
 | WiX Toolset 5.0.2 (`wix` local .NET tool) | MSI build only | MS-RL | Not shipped: no WiX extensions or custom-action DLLs in the MSI. Do not move to v6+ (OSMF fee). |
 | xunit 2.9.x | tests only | Apache-2.0 | |

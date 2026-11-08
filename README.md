@@ -4,7 +4,7 @@ highbridge lets a web application scan paper documents on the user's Windows PC.
 
 - drives TWAIN scanners, through [NTwain](https://github.com/soukoku/ntwain) (MIT);
 - exposes a local API on `http://127.0.0.1:47116` that only approved HTTPS websites can use;
-- registers the `highbridge://` URL scheme so a page can start the app (and a scan) with a link.
+- registers the `highbridge://` URL scheme so a page can start the app, a scan, or a card read with a link.
 
 The user approves each website once. After that, the site's scans start immediately, with no highbridge dialogs.
 
@@ -26,26 +26,30 @@ Status: **proof of concept** for Windows 10/11 workstations (32-bit build, PNG o
  HTTPS web app (browser)                         highbridge.exe (per-user tray app)
  ───────────────────────                         ─────────────────────────────────
  highbridge.js ── fetch http://127.0.0.1:47116 ──► Kestrel API ──► TWAIN (NTwain)
-      │            (Origin checked, CORS)              ▲
-      └── highbridge://launch | scan?... ──► Windows ──┘  (starts the app / forwards to the running one)
+      │            (Origin checked, CORS)              ├──► PC/SC (winscard)
+      └── highbridge://launch | scan | read-card ──► Windows ──┘
 ```
 
-1. **Pairing (once per site).** The first `POST /v1/pair` from a site shows *"Allow https://site to use your scanners?"*. This is the only highbridge prompt. Approved origins are saved in `%APPDATA%\Highbridge\settings.json` and can be removed in the tray menu's **Approved websites** window. The browser supplies the `Origin` header, so pages cannot fake it.
+1. **Pairing (once per site).** The first `POST /v1/pair` from a site shows *"Allow this website to use your scanners and card reader?"*. The prompt names both devices and says a card read sends the last four digits of the card number, the expiry, and the cardholder name, and that a stamped scan includes the Windows user and computer name. This is the only highbridge prompt. Approved origins are saved in `%APPDATA%\Highbridge\settings.json` and can be removed in the tray menu's **Approved websites** window. The browser supplies the `Origin` header, so pages cannot fake it. Sites approved under older wording are asked again before the first card read.
 2. **Scanning.** `POST /v1/scans` from a paired site starts the scan right away. highbridge also asks the driver to hide its progress window (`CAP_INDICATORS`) unless the page asks for the driver UI. The page polls `GET /v1/scans/{id}` and downloads each page from `/v1/scans/{id}/pages/{n}`. Results stay in memory only, are visible only to the origin that requested them, and expire after 10 minutes.
-3. **`highbridge://` links** only start the app (`highbridge://launch`) or queue a scan for an *already paired* origin (`highbridge://scan?v=1&origin=…&request=<random id>&dpi=…`). The scanner does not start until that origin's page polls the job over HTTP (within 30 seconds), so a forged link from another page or an email cannot run the scanner. A protocol link never carries data back, and it can never pair a site.
+3. **`highbridge://` links** start the app (`highbridge://launch`), queue a scan (`highbridge://scan?…`), or queue a card read (`highbridge://read-card?…`) for an *already paired* origin. The scanner or reader does not start until that origin's page polls the job over HTTP (within 30 seconds), so a forged link cannot run the device. A protocol link never carries data back, and it can never pair a site.
 4. **Browser permission.** Chrome, Edge and Firefox ask the user once to let a public site reach "apps on this device" (Local Network Access, loopback). The client sends `targetAddressSpace: 'loopback'` and should be called from a click.
 
 ### Local API (v1)
 
 | Request | Purpose |
 |---|---|
-| `GET /v1/status` | `{app, version, apiVersion, backend, paired, pairingAllowed}` |
+| `GET /v1/status` | `{app, version, apiVersion, backend, devices: [{kind, backend}], paired, pairingAllowed}`. `backend` stays the scanner backend |
 | `POST /v1/pair` | Ask the user to approve this site |
 | `GET /v1/scanners` | List scanners (paired sites only) |
 | `POST /v1/scans` | Body: `{scannerId?, dpi, colorMode: color\|gray\|blackWhite, source: auto\|flatbed\|feeder, duplex, showDriverUi, maxPages, format: png, stamp?: {position: top\|bottom}, barcodes?, barcodeFormats?}`. Returns `202` with the job |
 | `GET /v1/scans/{id}` | Job status: `queued`, `scanning`, `completed`, `failed` or `canceled`, plus pages. With `barcodes: true`, also the barcodes found |
 | `GET /v1/scans/{id}/pages/{n}` | Page image (`image/png`) |
 | `DELETE /v1/scans/{id}` | Discard or cancel a job |
+| `GET /v1/card-readers` | List readers (`{id, name, backend}`). No card-present flag. Current approval required |
+| `POST /v1/card-reads` | Body: `{readerId?, interface: auto\|contact\|contactless, aid?, waitForCardMs?}`. Returns `202` with the job. No APDU fields |
+| `GET /v1/card-reads/{id}` | Job status: `queued`, `reading`, `completed`, `failed` or `canceled`. The card fields are inline when completed. Also claims a `highbridge://read-card` job |
+| `DELETE /v1/card-reads/{id}` | Discard or cancel a card read |
 
 `format` is optional and only `png` is accepted for now; the option exists so PDF can be added later without changing the API shape.
 
@@ -73,17 +77,20 @@ A stamped job publishes its pages only once all of them are stamped; until then,
 
 Stamped scans send the user's Windows name and computer name to the site, so the pairing prompt says so. Sites approved before that wording are asked again the first time they request a stamp (`approval_required`), and the JS client handles this automatically. Sites listed in policy, and stamps required by policy, are covered by the admin.
 
-Errors are returned as `{ "error": "<code>", "message": "…" }`. Common codes are `origin_not_paired`, `pairing_denied`, `invalid_options`, `approval_required` and `stamp_disabled` (provenance stamp), `stamp_failed`, `paper_jam`, `no_scanners`, `twain_unavailable`, `scan_timeout` (the scanner stopped responding; the message says at which step) and `not_claimed` (a `highbridge://` scan that no page picked up).
+A completed card read returns `reader`, `interface` (`contact` or `contactless`), `applications` (every directory entry) and `selected` (one application: `aid`, `label`, `preferredName`, `priority`, `panLast4`, `expiry`, `cardholderName`). Absent optional fields are omitted. The full card number, tracks, PIN, cryptogram and raw card data never leave the machine.
+
+Errors are returned as `{ "error": "<code>", "message": "…" }`. Common codes are `origin_not_paired`, `pairing_denied`, `invalid_options`, `approval_required` and `stamp_disabled` (provenance stamp), `stamp_failed`, `paper_jam`, `no_scanners`, `twain_unavailable`, `scan_timeout` (the scanner stopped responding; the message says at which step), `not_claimed` (a `highbridge://` job that no page picked up), `card_reader_disabled`, `no_card`, `no_payment_apps`, `app_not_found`, `read_failed`, `pcsc_unavailable` and `read_timeout`.
 
 ## Repository layout
 
 | Path | What |
 |---|---|
-| `src/Highbridge.Core` | Scan options, `highbridge://` parser, origin rules and pairing, job manager, barcode detection, settings and policy, mock scanner with a built-in PNG encoder (cross-platform) |
+| `src/Highbridge.Core` | Scan and card-read options, `highbridge://` parser, origin rules and pairing, job managers, barcode detection, settings and policy, mock scanner and mock card reader (cross-platform) |
 | `src/Highbridge.Server` | Loopback HTTP API: Host and Origin checks, CORS, endpoints (cross-platform) |
 | `src/Highbridge.Twain` | TWAIN backend on NTwain (Windows) |
+| `src/Highbridge.Pcsc` | PC/SC card reader via P/Invoke to `winscard.dll` (Windows). Not referenced by Server, DevHost, or Core |
 | `src/Highbridge.App` | `Highbridge.exe`: tray app, pairing dialog, approved-sites window, protocol and auto-start registration (Windows, x86) |
-| `src/Highbridge.DevHost` | Headless host with the mock scanner, for Linux, macOS, CI and demos |
+| `src/Highbridge.DevHost` | Headless host with the mock scanner and mock card reader, for Linux, macOS, CI and demos |
 | `clients/js` | Browser client (`highbridge.js` plus `.d.ts`), with unit and end-to-end tests |
 | `docs/`, `samples/Highbridge.SampleSite` | Static demo page (GitHub Pages root) and a local host for it on `http://127.0.0.1:47200` |
 | `installer/` | WiX source for the MSI: `Highbridge.wxs` (package), `Dialogs.wxs` (installer screens), `License.rtf` (license text) |
@@ -116,6 +123,8 @@ dotnet run --project samples/Highbridge.SampleSite     # demo page on http://127
 ```
 
 Open http://127.0.0.1:47200, click **Connect**, then **Scan**. The mock scanner offers a duplex feeder, a flatbed, a "jammed" device for testing errors, and **highbridge mock feeder with barcode test sheets**: A4 pages with every supported barcode, turned and skewed. Tick **Find barcodes** and scan that device to see them listed.
+
+The **Card reader** tab lists readers and reads a card with the same options as `readCard`: reader, interface (`auto`, `contact`, or `contactless`), an optional application id, and how long to wait. `auto` uses whichever slot has a card. `contact` prefers the chip slot and the contact directory (PSE); `contactless` prefers the tap slot and the contactless directory (PPSE). If that directory is not on the card, the other is tried. Windows shows the two slots as two readers; a card in either slot of the same reader is accepted. The mock offers a reader with a Visa and a Mastercard (last four `1234`, expiry `2028-12`, name `DOE/JOHN`; `A0000000041010` selects the Mastercard), a reader with no card, and a reader with no payment applications.
 
 To print those sheets and try them on a real scanner: `dotnet run --project src/Highbridge.DevHost -- --write-barcode-sheets ./sheets` writes three PNGs at 300 dpi. Print each on A4, fit to the page.
 
@@ -253,11 +262,12 @@ To rerun the TWAIN tests without a scanner on Linux, `scripts/test-twain-wine.sh
   "allowedOrigins": ["https://app.example.com"],
   "allowPairing": false,
   "allowInsecureLoopbackOrigins": false,
-  "provenanceStamp": { "mode": "required", "position": "bottom" }
+  "provenanceStamp": { "mode": "required", "position": "bottom" },
+  "cardReader": { "mode": "enabled" }
 }
 ```
 
-`allowedOrigins` are approved without a prompt. `allowPairing: false` stops users from approving other sites. `provenanceStamp.mode` is `optional` (the default: the page decides), `required` (every scan is stamped) or `disabled` (stamp requests fail with `stamp_disabled`); `position`, when set, overrides the page's choice. The policy is read from this file only (no Group Policy templates); push it with your usual deployment tool. The port is always 47116.
+`allowedOrigins` are approved without a prompt. A listed origin may scan and read cards. `allowPairing: false` stops users from approving other sites. `provenanceStamp.mode` is `optional` (the default: the page decides), `required` (every scan is stamped) or `disabled` (stamp requests fail with `stamp_disabled`); `position`, when set, overrides the page's choice. `cardReader.mode` is `enabled` (the default) or `disabled`. `disabled` makes every card route return `card_reader_disabled` and leaves scanning alone. The policy is read from this file only (no Group Policy templates); push it with your usual deployment tool. The port is always 47116.
 
 To skip browser prompts on managed machines, use the browsers' own policies: the Local Network Access allowlist policies in Chrome and Edge, `LocalNetworkAccess.SkipDomains` in Firefox, and `AutoLaunchProtocolsFromOrigins` for the `highbridge://` prompt.
 
@@ -268,6 +278,7 @@ Copy `clients/js/highbridge.js` (and `highbridge.d.ts` for TypeScript) into your
 - `await client.connect()` makes sure the app is running (launching it via `highbridge://launch` if needed) and that the site is paired.
 - `await client.listScanners()` lists scanners.
 - `await client.scan(options, { onProgress, signal })` returns `{ id, pages: [{ index, width, height, mediaType, blob, provenance? }], stamp? }`. Pass `stamp: { position: 'bottom' }` for the provenance stamp. With `barcodes: true` the result also has `barcodes`, and each page has `barcodeStatus` and `barcodes`. If the app isn't running, it starts it via a `highbridge://` link.
+- `await client.readCard({ readerId, interface, aid, waitForCardMs })` returns `{ id, reader, interface, applications, selected }`. `selected` has `panLast4`, `expiry` and `cardholderName`. If the app isn't running, it starts it via `highbridge://read-card`.
 - Errors are `HighbridgeError` objects with a `code`, such as `not_running`, `setup_required` (when `installerUrl` is set and the app never starts), `loopback_blocked`, `pairing_denied` or `paper_jam`.
 - Call these from a click handler, and serve your site over HTTPS. Browsers deny loopback access to insecure public pages.
 - If your page runs in an iframe, the embedding page must delegate `allow="loopback-network"`.
@@ -275,6 +286,7 @@ Copy `clients/js/highbridge.js` (and `highbridge.d.ts` for TypeScript) into your
 ## Known limitations (POC)
 
 - **Barely tested with real scanners.** The MSI and tray app work on Windows; the first real scan (a Samsung all-in-one) hung, which led to the current TWAIN threading. The TWAIN backend is tested under Wine against a fake source (`scripts/test-twain-wine.sh`), not yet against real drivers.
+- **Card reads are covered by the mock reader in CI.** A real contact reader has been read through PC/SC. A tap uses the same read: both slots of a dual reader are watched, PPSE is tried and then PSE, and the Windows call is retried in the shapes contactless drivers accept. Restart the tray app from this build before trying a tap. If Windows still rejects it, the page message includes the PC/SC code.
 - PNG output only (PDF is planned). Large color scans at 600 dpi produce big PNGs, and everything is held in memory.
 - 32-bit only, so only 32-bit TWAIN drivers are visible.
 - Canceling a scan stops at the next page boundary. Scans waiting in the driver's own dialog cannot be aborted from the web page.

@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Highbridge.Cards;
 using Highbridge.Consent;
 using Highbridge.Jobs;
 using Highbridge.Scanning;
@@ -110,7 +111,17 @@ public static class HighbridgeServer
         v1.MapGet("/status", (HttpContext ctx) =>
         {
             string origin = OriginOf(ctx);
-            return Results.Ok(new StatusResponse("highbridge", AppVersion, ApiVersion, runtime.Backend.Name, runtime.Origins.IsPaired(origin), runtime.Origins.AllowPairing));
+            return Results.Ok(new StatusResponse(
+                "highbridge",
+                AppVersion,
+                ApiVersion,
+                runtime.Backend.Name,
+                [
+                    new DeviceStatus("scanner", runtime.Backend.Name),
+                    new DeviceStatus("cardReader", runtime.CardReader.Name),
+                ],
+                runtime.Origins.IsPaired(origin),
+                runtime.Origins.AllowPairing));
         });
 
         v1.MapPost("/pair", async (HttpContext ctx) =>
@@ -219,12 +230,7 @@ public static class HighbridgeServer
             }
             catch (JobRejectedException ex)
             {
-                return Error(ex.Code switch
-                {
-                    "too_many_jobs" => StatusCodes.Status429TooManyRequests,
-                    "approval_required" or "stamp_disabled" => StatusCodes.Status403Forbidden,
-                    _ => StatusCodes.Status400BadRequest,
-                }, ex.Code, ex.Message);
+                return Rejected(ex);
             }
         });
 
@@ -265,17 +271,119 @@ public static class HighbridgeServer
                 : Error(StatusCodes.Status404NotFound, "not_found", "No such scan.");
         });
 
+        v1.MapGet("/card-readers", async (HttpContext ctx) =>
+        {
+            if (RequireCard(ctx, runtime) is { } denied)
+            {
+                return denied;
+            }
+
+            try
+            {
+                var readers = await runtime.CardReads.ListReadersAsync(ctx.RequestAborted);
+                return Results.Ok(new CardReadersResponse(readers));
+            }
+            catch (CardReaderException ex)
+            {
+                return Error(StatusCodes.Status503ServiceUnavailable, ex.Code, ex.Message);
+            }
+        });
+
+        v1.MapPost("/card-reads", async (HttpContext ctx) =>
+        {
+            if (RequireCard(ctx, runtime) is { } denied)
+            {
+                return denied;
+            }
+
+            CardReadOptions options;
+            try
+            {
+                options = ctx.Request.ContentLength is 0 or null && !ctx.Request.HasJsonContentType()
+                    ? new CardReadOptions()
+                    : await ctx.Request.ReadFromJsonAsync<CardReadOptions>(HighbridgeJson.Options, ctx.RequestAborted) ?? new CardReadOptions();
+            }
+            catch (Exception ex) when (ex is JsonException or InvalidOperationException or BadHttpRequestException)
+            {
+                return Error(StatusCodes.Status400BadRequest, "invalid_options", "The request body is not valid card read options JSON.");
+            }
+
+            try
+            {
+                var job = runtime.CardReads.Start(OriginOf(ctx), options, CardReadTrigger.Api);
+                return Results.Accepted($"/v1/card-reads/{job.Id}", CardReadJobResponse.From(job));
+            }
+            catch (JobRejectedException ex)
+            {
+                return Rejected(ex);
+            }
+        });
+
+        v1.MapGet("/card-reads/{id}", (HttpContext ctx, string id) =>
+        {
+            if (RequireCard(ctx, runtime) is { } denied)
+            {
+                return denied;
+            }
+
+            return runtime.CardReads.Claim(id, OriginOf(ctx)) is { } job
+                ? Results.Ok(CardReadJobResponse.From(job))
+                : Error(StatusCodes.Status404NotFound, "not_found", "No such card read.");
+        });
+
+        v1.MapDelete("/card-reads/{id}", (HttpContext ctx, string id) =>
+        {
+            if (RequireCard(ctx, runtime) is { } denied)
+            {
+                return denied;
+            }
+
+            return runtime.CardReads.Delete(id, OriginOf(ctx))
+                ? Results.NoContent()
+                : Error(StatusCodes.Status404NotFound, "not_found", "No such card read.");
+        });
+
         app.MapFallback(() => Error(StatusCodes.Status404NotFound, "not_found", "Unknown endpoint."));
     }
 
+    private static IResult Rejected(JobRejectedException ex) =>
+        Error(ex.Code switch
+        {
+            "too_many_jobs" => StatusCodes.Status429TooManyRequests,
+            "approval_required" or "stamp_disabled" or "card_reader_disabled" => StatusCodes.Status403Forbidden,
+            _ => StatusCodes.Status400BadRequest,
+        }, ex.Code, ex.Message);
+
     /// <summary>
     /// Paired with the current approval wording. A site approved under older wording is asked
-    /// again, so the user sees that stamped scans include their user and computer names.
+    /// again, so the user sees the card fields and the stamp identity sentence.
     /// </summary>
     private static bool IsApproved(HighbridgeRuntime runtime, string origin) =>
         runtime.Origins.IsPaired(origin) && runtime.Origins.ApprovalCoversIdentity(origin);
 
     private static string OriginOf(HttpContext ctx) => (string)ctx.Items[OriginItemKey]!;
+
+    /// <summary>
+    /// Card routes need the current approval, not an older scanners-only grant. A disabled reader
+    /// fails these routes and leaves scanning alone.
+    /// </summary>
+    private static IResult? RequireCard(HttpContext ctx, HighbridgeRuntime runtime)
+    {
+        if (!runtime.Policy.CardReaderEnabled)
+        {
+            return Error(StatusCodes.Status403Forbidden, "card_reader_disabled", CardReadManager.DisabledMessage);
+        }
+
+        string origin = OriginOf(ctx);
+        if (!runtime.Origins.IsPaired(origin))
+        {
+            return Error(StatusCodes.Status403Forbidden, "origin_not_paired", "Pair this site first (POST /v1/pair).");
+        }
+
+        return runtime.Origins.ApprovalCoversIdentity(origin)
+            ? null
+            : Error(StatusCodes.Status403Forbidden, "approval_required", CardReadManager.ApprovalMessage);
+    }
 
     private static IResult? RequirePaired(HttpContext ctx, HighbridgeRuntime runtime) =>
         runtime.Origins.IsPaired(OriginOf(ctx))

@@ -122,6 +122,27 @@ test('e2e: barcode scan returns rotated codes from the mock barcode sheet', { sk
   );
 });
 
+test('e2e: readCard returns the mock card and the failure readers', { skip: !DLL && 'set HIGHBRIDGE_DEVHOST_DLL' }, async () => {
+  const client = new HighbridgeClient({ port: PORT, fetch: withOrigin(ORIGIN), origin: ORIGIN, storage: null, pollIntervalMs: 50 });
+  await client.connect({ launch: false });
+  const readers = await client.listCardReaders();
+  assert.ok(readers.some((reader) => reader.id === 'mock-reader'));
+
+  const result = await client.readCard();
+  assert.equal(result.interface, 'contact');
+  assert.equal(result.applications.length, 2);
+  assert.equal(result.selected.panLast4, '1234');
+  assert.equal(result.selected.expiry, '2028-12');
+  assert.equal(result.selected.cardholderName, 'DOE/JOHN');
+
+  const debit = await client.readCard({ aid: 'A0000000041010', interface: 'contactless' });
+  assert.equal(debit.selected.panLast4, '5678');
+  assert.equal(debit.interface, 'contactless');
+  await assert.rejects(client.readCard({ readerId: 'mock-no-card' }), (err) => err.code === 'no_card');
+  await assert.rejects(client.readCard({ readerId: 'mock-empty' }), (err) => err.code === 'no_payment_apps');
+  await assert.rejects(client._json('POST', '/v1/card-reads', { apdu: '00A40400' }), (err) => err.code === 'invalid_options');
+});
+
 test('e2e: formats other than png are rejected', { skip: !DLL && 'set HIGHBRIDGE_DEVHOST_DLL' }, async () => {
   const client = new HighbridgeClient({ port: PORT, fetch: withOrigin(ORIGIN), origin: ORIGIN, storage: null });
   await client.connect({ launch: false });
