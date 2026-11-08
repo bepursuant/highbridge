@@ -12,11 +12,11 @@ public sealed class OriginRegistry
     public static readonly TimeSpan PairingPromptTimeout = TimeSpan.FromMinutes(2);
 
     /// <summary>
-    /// The approval wording shown now. Version 2 added the stamp identity sentence. Version 3 adds
-    /// card reads: the last four digits of the card number, the expiry, and the cardholder name
-    /// leave the machine.
+    /// The approval wording shown now. Version 2 added the stamp identity sentence. Version 3 added
+    /// card reads of the last four digits, the expiry, and the cardholder name. Version 4 tells the
+    /// user the full card number is sent to the site over the local connection.
     /// </summary>
-    public const int CurrentApprovalVersion = 3;
+    public const int CurrentApprovalVersion = 4;
 
     private readonly SettingsStore _settings;
     private readonly HighbridgePolicy _policy;

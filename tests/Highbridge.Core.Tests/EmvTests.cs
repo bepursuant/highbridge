@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Highbridge;
 using Highbridge.Cards;
 
 namespace Highbridge.Core.Tests;
@@ -78,11 +79,14 @@ public class EmvTests
 
         var selected = Emv.MapSelection(app, [record]);
 
+        Assert.Equal("4111111111111234", selected.Pan);
         Assert.Equal("1234", selected.PanLast4);
         Assert.Equal("2028-12", selected.Expiry);
         Assert.Equal("DOE/JOHN", selected.CardholderName);
         Assert.Null(selected.PreferredName);
-        AssertNoFullPan(selected);
+        Assert.DoesNotContain("4111111111119999", selected.Pan, StringComparison.Ordinal);
+        Assert.DoesNotContain("0011223344556677", selected.ToString(), StringComparison.Ordinal);
+        AssertNumberIsForThePageOnly(selected, "4111111111111234");
     }
 
     [Fact]
@@ -94,10 +98,12 @@ public class EmvTests
 
         var selected = Emv.MapSelection(app, [record]);
 
+        Assert.Equal("4111111111115678", selected.Pan);
         Assert.Equal("5678", selected.PanLast4);
         Assert.Equal("2027-12", selected.Expiry);
         Assert.Null(selected.CardholderName);
-        AssertNoFullPan(selected);
+        Assert.DoesNotContain("2712", selected.Pan, StringComparison.Ordinal);
+        AssertNumberIsForThePageOnly(selected, "4111111111115678");
     }
 
     [Fact]
@@ -110,8 +116,10 @@ public class EmvTests
 
         var selected = Emv.MapSelection(new CardApplication("A0000000031010", null, null, null), [record]);
 
+        Assert.Equal("4111111111111234", selected.Pan);
         Assert.Equal("1234", selected.PanLast4);
         Assert.Equal("2028-12", selected.Expiry);
+        Assert.DoesNotContain("5678", selected.Pan, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -141,12 +149,16 @@ public class EmvTests
         Assert.Equal("A0000000031010", new CardReadOptions { Aid = "a0000000031010" }.NormalizedAid);
     }
 
-    private static void AssertNoFullPan(CardSelection selected)
+    private static void AssertNumberIsForThePageOnly(CardSelection selected, string pan)
     {
-        foreach (string? value in new[] { selected.Aid, selected.Label, selected.PreferredName, selected.PanLast4, selected.Expiry, selected.CardholderName })
-        {
-            Assert.DoesNotContain("411111111111", value ?? string.Empty, StringComparison.Ordinal);
-        }
+        Assert.Equal(pan, selected.Pan);
+        Assert.DoesNotContain(pan, selected.ToString(), StringComparison.Ordinal);
+        string json = JsonSerializer.Serialize(selected, HighbridgeJson.Options);
+        Assert.Contains($"\"pan\":\"{pan}\"", json, StringComparison.Ordinal);
+        selected.ClearCardNumber();
+        Assert.Equal("", selected.Pan);
+        Assert.DoesNotContain(pan, JsonSerializer.Serialize(selected, HighbridgeJson.Options), StringComparison.Ordinal);
+        Assert.Equal(pan[^4..], selected.PanLast4);
     }
 
     private static byte[] Wrap(byte[] inner) => Tlv("6F", inner);

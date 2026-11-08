@@ -16,7 +16,7 @@ public sealed class CardReadManager : IDisposable
     public const string DisabledMessage = "Card reading is turned off by policy.";
 
     public const string ApprovalMessage =
-        "Approve this site again so it can read cards. A card read sends the last four digits of the card number, the expiry, and the cardholder name.";
+        "Approve this site again so it can read cards. A card read sends the full card number, the expiry, and the cardholder name to the site over the local connection.";
 
     /// <summary>Extra time after <see cref="CardReadOptions.WaitForCardMs"/> before a stuck read is given up.</summary>
     private static readonly TimeSpan ReadSlack = TimeSpan.FromSeconds(30);
@@ -129,6 +129,7 @@ public sealed class CardReadManager : IDisposable
         job.Cancellation.Cancel();
         Complete(job, CardReadStatus.Canceled, "canceled", "The card read was canceled.");
         _jobs.TryRemove(id, out _);
+        ReleaseCardNumber(job);
         return true;
     }
 
@@ -143,6 +144,7 @@ public sealed class CardReadManager : IDisposable
             if (job.IsFinished && job.FinishedAt < cutoff)
             {
                 _jobs.TryRemove(job.Id, out _);
+                ReleaseCardNumber(job);
             }
         }
     }
@@ -153,8 +155,12 @@ public sealed class CardReadManager : IDisposable
         foreach (var job in _jobs.Values)
         {
             job.Cancellation.Cancel();
+            ReleaseCardNumber(job);
         }
     }
+
+    /// <summary>Drops the chip card number once the paired page can no longer collect the job.</summary>
+    private static void ReleaseCardNumber(CardReadJob job) => job.Result?.Selected.ClearCardNumber();
 
     private async Task RunAsync(CardReadJob job)
     {

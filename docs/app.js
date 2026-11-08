@@ -368,7 +368,7 @@ function renderCard(result) {
     if (selected) {
       const pan = document.createElement('span');
       pan.className = 'card-pan';
-      pan.textContent = `•••• ${result.selected.panLast4}`;
+      pan.textContent = result.selected.pan;
       const row = document.createElement('span');
       row.className = 'card-row';
       const name = document.createElement('span');
@@ -409,7 +409,7 @@ function renderCard(result) {
       dash(fields.label),
       dash(fields.preferredName),
       dash(fields.priority),
-      selected ? result.selected.panLast4 : '—',
+      selected ? result.selected.pan : '—',
       selected ? result.selected.expiry : '—',
       selected ? dash(result.selected.cardholderName) : '—',
     ]) {
@@ -465,7 +465,7 @@ cardForm.addEventListener('submit', async (event) => {
     });
     renderCard(result);
     const name = result.selected.preferredName || result.selected.label || result.selected.aid;
-    cardProgress.textContent = `Done · ${name} · •••• ${result.selected.panLast4} · ${result.selected.expiry}`;
+    cardProgress.textContent = `Done · ${name} · ${result.selected.pan} · ${result.selected.expiry}`;
     if (readerSelect.disabled) loadReaders().catch(() => {});
   } catch (err) {
     cardProgress.textContent = '';

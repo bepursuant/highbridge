@@ -131,11 +131,13 @@ test('e2e: readCard returns the mock card and the failure readers', { skip: !DLL
   const result = await client.readCard();
   assert.equal(result.interface, 'contact');
   assert.equal(result.applications.length, 2);
+  assert.equal(result.selected.pan, '4111111111111234');
   assert.equal(result.selected.panLast4, '1234');
   assert.equal(result.selected.expiry, '2028-12');
   assert.equal(result.selected.cardholderName, 'DOE/JOHN');
 
   const debit = await client.readCard({ aid: 'A0000000041010', interface: 'contactless' });
+  assert.equal(debit.selected.pan, '5555555555555678');
   assert.equal(debit.selected.panLast4, '5678');
   assert.equal(debit.interface, 'contactless');
   await assert.rejects(client.readCard({ readerId: 'mock-no-card' }), (err) => err.code === 'no_card');

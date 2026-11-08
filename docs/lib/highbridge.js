@@ -182,8 +182,9 @@ export class HighbridgeClient {
   }
 
   /**
-   * Reads one card. The result is the last four digits, expiry, and cardholder name of one
-   * application — never the full number, a track, or an APDU.
+   * Reads one card. The selected application includes the full card number, expiry, and
+   * cardholder name. highbridge runs on this computer and returns the number only to this page.
+   * A track, PIN, or raw card data is not included.
    * @param {object} [options]
    * @param {string} [options.readerId]
    * @param {'auto'|'contact'|'contactless'} [options.interface]
@@ -253,8 +254,8 @@ export class HighbridgeClient {
     try {
       return await this._json('POST', '/v1/card-reads', options);
     } catch (err) {
-      // A card read sends the last four, the expiry, and the cardholder name. Sites approved
-      // before highbridge said so are asked once more.
+      // A card read sends the full card number to the site over the local connection. Sites
+      // approved before highbridge said so are asked once more.
       if (err.code !== 'approval_required') throw err;
       await this.pair();
       return this._json('POST', '/v1/card-reads', options);

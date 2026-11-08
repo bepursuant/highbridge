@@ -58,7 +58,9 @@ public sealed class CardApiTests : IAsyncLifetime
         job = await Poll(job.Id, Site);
 
         Assert.Equal(CardReadStatus.Completed, job.Status);
-        Assert.Equal("1234", job.Selected!.PanLast4);
+        Assert.Equal(MockCardReaderBackend.VisaPan, job.Selected!.Pan);
+        Assert.Equal("1234", job.Selected.PanLast4);
+        Assert.DoesNotContain(MockCardReaderBackend.VisaPan, job.Selected.ToString(), StringComparison.Ordinal);
         Assert.Equal("2028-12", job.Selected.Expiry);
         Assert.Equal("DOE/JOHN", job.Selected.CardholderName);
         Assert.Equal(2, job.Applications!.Count);
@@ -90,7 +92,8 @@ public sealed class CardApiTests : IAsyncLifetime
         var created = await Json<CardReadJobResponse>(await Post("/v1/card-reads", Site, """{"aid":"A0000000041010"}"""));
         var job = await Poll(created.Id, Site);
 
-        Assert.Equal("5678", job.Selected!.PanLast4);
+        Assert.Equal(MockCardReaderBackend.MastercardPan, job.Selected!.Pan);
+        Assert.Equal("5678", job.Selected.PanLast4);
         Assert.Equal("2027-06", job.Selected.Expiry);
     }
 
@@ -109,7 +112,7 @@ public sealed class CardApiTests : IAsyncLifetime
     [Fact]
     public async Task Old_approval_is_asked_again_and_an_apdu_is_rejected()
     {
-        _runtime.Settings.Update(s => s.PairedOrigins.Add(new PairedOrigin { Origin = Site, ApprovalVersion = 2 }));
+        _runtime.Settings.Update(s => s.PairedOrigins.Add(new PairedOrigin { Origin = Site, ApprovalVersion = 3 }));
         var rejected = await Post("/v1/card-reads", Site, "{}");
         Assert.Equal(HttpStatusCode.Forbidden, rejected.StatusCode);
         Assert.Equal("approval_required", (await Json<ErrorResponse>(rejected)).Error);
@@ -149,7 +152,8 @@ public sealed class CardApiTests : IAsyncLifetime
         var job = await Poll(id, Site);
         Assert.Equal(CardReadStatus.Completed, job.Status);
         Assert.Equal(CardReadTrigger.ProtocolUrl, job.Trigger);
-        Assert.Equal("1234", job.Selected!.PanLast4);
+        Assert.Equal(MockCardReaderBackend.VisaPan, job.Selected!.Pan);
+        Assert.Equal("1234", job.Selected.PanLast4);
     }
 
     private async Task StartAsync()

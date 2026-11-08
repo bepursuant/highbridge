@@ -13,10 +13,13 @@ public sealed class MockCardReaderBackend : ICardReaderBackend
     public const string VisaAid = "A0000000031010";
     public const string MastercardAid = "A0000000041010";
 
+    /// <summary>Test numbers only. A new selection is built per read so wiping one job cannot clear the next.</summary>
+    public const string VisaPan = "4111111111111234";
+
+    public const string MastercardPan = "5555555555555678";
+
     private static readonly CardApplication Visa = new(VisaAid, "VISA CREDIT", "Visa", 1);
     private static readonly CardApplication Mastercard = new(MastercardAid, "MASTERCARD", null, 2);
-    private static readonly CardSelection VisaSelected = new(VisaAid, "VISA CREDIT", "Visa", 1, "1234", "2028-12", "DOE/JOHN");
-    private static readonly CardSelection MastercardSelected = new(MastercardAid, "MASTERCARD", null, 2, "5678", "2027-06", "DOE/JANE");
 
     private static readonly IReadOnlyList<CardReaderInfo> Readers =
     [
@@ -46,12 +49,12 @@ public sealed class MockCardReaderBackend : ICardReaderBackend
         }
 
         CardApplication[] apps = [Visa, Mastercard];
-        CardSelection selected = VisaSelected;
+        CardSelection selected = new(VisaAid, "VISA CREDIT", "Visa", 1, VisaPan, "2028-12", "DOE/JOHN");
         if (options.NormalizedAid is { } aid)
         {
             if (aid.Equals(MastercardAid, StringComparison.OrdinalIgnoreCase))
             {
-                selected = MastercardSelected;
+                selected = new(MastercardAid, "MASTERCARD", null, 2, MastercardPan, "2027-06", "DOE/JANE");
             }
             else if (!aid.Equals(VisaAid, StringComparison.OrdinalIgnoreCase))
             {

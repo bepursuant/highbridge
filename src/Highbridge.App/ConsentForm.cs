@@ -77,7 +77,8 @@ internal sealed class ConsentForm : Form
         "Allow this website to use your scanners and card reader?",
         request.Origin,
         "The site will be able to list your scanners and scan documents, and to read cards, whenever it asks, without asking you again. "
-            + "A card read sends the last four digits of the card number, the expiry, and the cardholder name. "
+            + "A card read sends the full card number, the expiry, and the cardholder name to this website. "
+            + "highbridge runs on this computer: the number goes from the card reader to the site over the local connection, and highbridge does not send it anywhere else or write it to its log. "
             + "Scans it asks to stamp will include your Windows user name and computer name. "
             + "Only allow sites you trust. You can remove the site later from \"Approved websites\" in the highbridge tray menu.",
         "Allow",

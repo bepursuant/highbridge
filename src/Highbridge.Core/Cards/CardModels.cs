@@ -73,17 +73,103 @@ public sealed record CardReaderRef(string Id, string Name);
 public sealed record CardApplication(string Aid, string? Label, string? PreferredName, int? Priority);
 
 /// <summary>
-/// The one application this read selected. <see cref="PanLast4"/> is four digits, never the full
-/// number. <see cref="Expiry"/> is <c>YYYY-MM</c>.
+/// Digits of the card number from the chip. The paired page collects them over the loopback API.
+/// highbridge does not send them anywhere else, and <see cref="ToString"/> does not include them.
+/// The copy held for that response is wiped when the job is deleted or expires.
 /// </summary>
-public sealed record CardSelection(
-    string Aid,
-    string? Label,
-    string? PreferredName,
-    int? Priority,
-    string PanLast4,
-    string Expiry,
-    string? CardholderName);
+public sealed class CardNumber
+{
+    private readonly object _gate = new();
+    private char[]? _digits;
+
+    public CardNumber(string digits)
+    {
+        if (digits.Length is < 12 or > 19 || !digits.All(static c => c is >= '0' and <= '9'))
+        {
+            throw new ArgumentException("A card number is 12 to 19 digits.", nameof(digits));
+        }
+
+        _digits = digits.ToCharArray();
+        Last4 = digits[^4..];
+    }
+
+    public string Last4 { get; }
+
+    /// <summary>Digits for the local response. Empty after <see cref="Clear"/>.</summary>
+    public string Reveal()
+    {
+        lock (_gate)
+        {
+            return _digits is null ? "" : new string(_digits);
+        }
+    }
+
+    public void Clear()
+    {
+        lock (_gate)
+        {
+            if (_digits is null)
+            {
+                return;
+            }
+
+            Array.Clear(_digits);
+            _digits = null;
+        }
+    }
+
+    public override string ToString() => "••••" + Last4;
+}
+
+/// <summary>
+/// The one application this read selected. <see cref="Pan"/> is the chip card number, digits only.
+/// <see cref="PanLast4"/> is its last four. <see cref="Expiry"/> is <c>YYYY-MM</c>.
+/// Tracks, PIN, and raw card bytes are not on this object.
+/// </summary>
+public sealed record CardSelection
+{
+    private readonly CardNumber _pan;
+
+    public CardSelection(
+        string aid,
+        string? label,
+        string? preferredName,
+        int? priority,
+        string pan,
+        string expiry,
+        string? cardholderName)
+    {
+        _pan = new CardNumber(pan);
+        Aid = aid;
+        Label = label;
+        PreferredName = preferredName;
+        Priority = priority;
+        PanLast4 = _pan.Last4;
+        Expiry = expiry;
+        CardholderName = cardholderName;
+    }
+
+    public string Aid { get; }
+
+    public string? Label { get; }
+
+    public string? PreferredName { get; }
+
+    public int? Priority { get; }
+
+    /// <summary>Full card number from the chip. Only the paired site receives it, over the local API.</summary>
+    public string Pan => _pan.Reveal();
+
+    public string PanLast4 { get; }
+
+    public string Expiry { get; }
+
+    public string? CardholderName { get; }
+
+    internal void ClearCardNumber() => _pan.Clear();
+
+    public override string ToString() => $"aid={Aid} last4={PanLast4} expiry={Expiry}";
+}
 
 public sealed record CardReadResult(
     CardReaderRef Reader,
