@@ -176,7 +176,12 @@ export interface CardSelection {
   label?: string;
   preferredName?: string;
   priority?: number;
-  /** Four digits. Never the full card number. */
+  /**
+   * Full card number from the chip, digits only. highbridge is a program on this computer:
+   * the number is returned to this page over the local connection and is not sent anywhere else.
+   */
+  pan: string;
+  /** Last four digits of `pan`. */
   panLast4: string;
   /** YYYY-MM. */
   expiry: string;

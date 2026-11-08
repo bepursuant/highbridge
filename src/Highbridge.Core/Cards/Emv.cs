@@ -178,8 +178,9 @@ internal static class Emv
     }
 
     /// <summary>
-    /// Maps directory fields plus record bytes onto the allowlist. Tag 5A wins over the PAN inside
-    /// tag 57. Tag 5F24 wins over the expiry inside tag 57. Track bytes are not copied out.
+    /// Maps directory fields plus record bytes onto the fields the page may receive. Tag 5A wins
+    /// over the number inside tag 57. Tag 5F24 wins over the expiry inside tag 57. The track itself,
+    /// its discretionary data, and every other tag stay here.
     /// </summary>
     internal static CardSelection MapSelection(CardApplication app, IEnumerable<byte[]> blobs)
     {
@@ -196,7 +197,7 @@ internal static class Emv
             var tags = Parse(blob);
             if (tags.FindFirst("5A") is { } panTag)
             {
-                pan5A = Last4(PanNibbles(panTag.Value.Bytes)) ?? pan5A;
+                pan5A = Digits(PanNibbles(panTag.Value.Bytes)) ?? pan5A;
             }
 
             if (tags.FindFirst("57") is { } track)
@@ -216,14 +217,14 @@ internal static class Emv
             preferred ??= Text(tags.FindFirst("9F12"));
         }
 
-        string? panLast4 = pan5A ?? pan57;
+        string? pan = pan5A ?? pan57;
         string? expiry = expiryDate ?? expiryTrack;
-        if (panLast4 is null || expiry is null)
+        if (pan is null || expiry is null)
         {
             throw new EmvFormatException();
         }
 
-        return new CardSelection(app.Aid, label, preferred, app.Priority, panLast4, expiry, name);
+        return new CardSelection(app.Aid, label, preferred, app.Priority, pan, expiry, name);
     }
 
     private static byte[] FillDol(ReadOnlySpan<byte> dol)
@@ -484,14 +485,14 @@ internal static class Emv
 
                 if (nibble > 9 || expiry.Count == 4)
                 {
-                    return (Last4(pan), ExpiryNibbles(expiry));
+                    return (Digits(pan), ExpiryNibbles(expiry));
                 }
 
                 expiry.Add(nibble);
             }
         }
 
-        return (Last4(pan), ExpiryNibbles(expiry));
+        return (Digits(pan), ExpiryNibbles(expiry));
     }
 
     private static string? ExpiryNibbles(List<int> nibbles)
@@ -506,30 +507,21 @@ internal static class Emv
         return month is < 1 or > 12 ? null : $"{2000 + year:0000}-{month:00}";
     }
 
-    /// <summary>Keeps four digits. The rest of the number is never assembled into a string.</summary>
-    private static string? Last4(IEnumerable<int> nibbles)
+    /// <summary>12–19 decimal digits. Padding and the track separator are not included.</summary>
+    private static string? Digits(IEnumerable<int> nibbles)
     {
-        var ring = new char[4];
-        int count = 0;
+        var chars = new List<char>();
         foreach (int nibble in nibbles)
         {
-            ring[count % 4] = (char)('0' + nibble);
-            count++;
+            if (chars.Count == 19)
+            {
+                return null;
+            }
+
+            chars.Add((char)('0' + nibble));
         }
 
-        if (count < 4)
-        {
-            return null;
-        }
-
-        var last = new char[4];
-        int start = count % 4;
-        for (int i = 0; i < 4; i++)
-        {
-            last[i] = ring[(start + i) % 4];
-        }
-
-        return new string(last);
+        return chars.Count < 12 ? null : new string(chars.ToArray());
     }
 }
 

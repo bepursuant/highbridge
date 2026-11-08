@@ -34,12 +34,15 @@ public class CardReadTests
         Assert.Equal(MockCardReaderBackend.SuccessId, read.Reader.Id);
         Assert.Equal(CardInterface.Contact, read.Interface);
         Assert.Equal(2, read.Applications.Count);
+        Assert.Equal(MockCardReaderBackend.VisaPan, read.Selected.Pan);
         Assert.Equal("1234", read.Selected.PanLast4);
+        Assert.DoesNotContain(MockCardReaderBackend.VisaPan, read.ToString(), StringComparison.Ordinal);
         Assert.Equal("2028-12", read.Selected.Expiry);
         Assert.Equal("DOE/JOHN", read.Selected.CardholderName);
         Assert.Null(read.Applications[1].PreferredName);
 
         var debit = await backend.ReadAsync(new CardReadOptions { Aid = "a0000000041010", Interface = CardInterface.Contactless }, CancellationToken.None);
+        Assert.Equal(MockCardReaderBackend.MastercardPan, debit.Selected.Pan);
         Assert.Equal("5678", debit.Selected.PanLast4);
         Assert.Equal(CardInterface.Contactless, debit.Interface);
 
@@ -47,6 +50,22 @@ public class CardReadTests
         Assert.Equal("no_card", noCard.Code);
         var empty = await Assert.ThrowsAsync<CardReaderException>(() => backend.ReadAsync(new CardReadOptions { ReaderId = MockCardReaderBackend.EmptyId }, CancellationToken.None));
         Assert.Equal("no_payment_apps", empty.Code);
+    }
+
+    [Fact]
+    public async Task Deleting_a_finished_read_wipes_the_card_number()
+    {
+        using var runtime = TestRuntime.Create();
+        runtime.Origins.Pair(Origin);
+
+        var job = runtime.CardReads.Start(Origin, new CardReadOptions(), CardReadTrigger.Api);
+        await job.Finished.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(MockCardReaderBackend.VisaPan, job.Result!.Selected.Pan);
+        Assert.True(runtime.CardReads.Delete(job.Id, Origin));
+        Assert.Equal("", job.Result.Selected.Pan);
+        Assert.Equal("1234", job.Result.Selected.PanLast4);
+        Assert.DoesNotContain(MockCardReaderBackend.VisaPan, job.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -103,11 +122,11 @@ public class CardReadTests
     public void An_older_approval_must_be_renewed_before_a_card_read()
     {
         using var runtime = TestRuntime.Create();
-        runtime.Settings.Update(s => s.PairedOrigins.Add(new PairedOrigin { Origin = Origin, ApprovalVersion = 2 }));
+        runtime.Settings.Update(s => s.PairedOrigins.Add(new PairedOrigin { Origin = Origin, ApprovalVersion = 3 }));
 
         var rejected = Assert.Throws<JobRejectedException>(() => runtime.CardReads.Start(Origin, new CardReadOptions(), CardReadTrigger.Api));
         Assert.Equal("approval_required", rejected.Code);
-        Assert.Contains("last four", rejected.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("full card number", rejected.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

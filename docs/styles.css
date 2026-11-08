@@ -151,7 +151,7 @@ button:disabled { cursor: progress; opacity: 0.7; }
 }
 .card-app:not(.selected) .card-face { background: linear-gradient(145deg, #334155, #64748b); }
 .card-chip { align-self: flex-start; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; background: rgb(255 255 255 / 0.18); padding: 2px 8px; border-radius: 999px; }
-.card-pan { font-family: "Cascadia Code", ui-monospace, monospace; letter-spacing: 0.14em; font-size: 1.05rem; }
+.card-pan { font-family: "Cascadia Code", ui-monospace, monospace; letter-spacing: 0.04em; font-size: 0.95rem; }
 .card-row { display: flex; justify-content: space-between; gap: 8px; font-size: 0.85rem; }
 .card-app .meta .aid { font-family: "Cascadia Code", ui-monospace, monospace; font-size: 0.75rem; }
 

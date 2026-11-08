@@ -74,7 +74,7 @@ class FakeApp {
       applications: done ? [{ aid: 'A0000000031010', label: 'VISA CREDIT', preferredName: 'Visa', priority: 1 }] : undefined,
       selected: done ? {
         aid: 'A0000000031010', label: 'VISA CREDIT', preferredName: 'Visa', priority: 1,
-        panLast4: '1234', expiry: '2028-12', cardholderName: 'DOE/JOHN',
+        pan: '4111111111111234', panLast4: '1234', expiry: '2028-12', cardholderName: 'DOE/JOHN',
       } : undefined,
     };
   }
@@ -270,6 +270,7 @@ test('readCard returns the allowlisted fields and re-approves an old approval on
   const app = new FakeApp({ paired: true, reapprove: true });
   const result = await client(app).readCard({ interface: 'contact', waitForCardMs: 1000 });
   assert.deepEqual(app.calls.filter((c) => c.startsWith('POST')), ['POST /v1/card-reads', 'POST /v1/pair', 'POST /v1/card-reads']);
+  assert.equal(result.selected.pan, '4111111111111234');
   assert.equal(result.selected.panLast4, '1234');
   assert.equal(result.selected.expiry, '2028-12');
   assert.equal(result.interface, 'contact');

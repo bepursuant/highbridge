@@ -118,7 +118,7 @@
   <div id="view-card" class="layout" role="tabpanel" aria-labelledby="tab-card" hidden>
     <section class="panel controls" aria-labelledby="card-heading">
       <h1 id="card-heading">Read a card</h1>
-      <p class="lede">This page asks the highbridge app on your computer to read a payment card. It returns the applications on the card and, for the one it selected, the last four digits, the expiry, and the cardholder name. The full number stays on this computer.</p>
+      <p class="lede">This page asks the highbridge app on your computer to read a payment card. For the application it selects, the result includes the full card number, the expiry, and the cardholder name. highbridge runs on this computer and gives that number only to this page.</p>
 
       <form id="card-form" novalidate>
         <label class="field">
@@ -161,8 +161,8 @@
         <summary>How this works</summary>
         <ol>
           <li>The page talks to highbridge at <code>http://127.0.0.1:47116</code>. Your browser may ask to let this site reach apps on your device. Allow it.</li>
-          <li>The first time, highbridge asks you to approve this website. The prompt names the last four digits, the expiry, and the cardholder name. After that, Read card starts straight away.</li>
-          <li>The page only sends the reader, the interface, an optional application id, and how long to wait. highbridge chooses every card command. Nothing else from the card is sent back.</li>
+          <li>The first time, highbridge asks you to approve this website. The prompt says the full card number, the expiry, and the cardholder name are sent to this page over the local connection. After that, Read card starts straight away.</li>
+          <li>The page only sends the reader, the interface, an optional application id, and how long to wait. highbridge chooses every card command. The card number comes from the chip. Tracks and raw card data are not sent back.</li>
         </ol>
       </details>
     </section>
@@ -187,7 +187,7 @@
               <th>Label</th>
               <th>Preferred name</th>
               <th>Priority</th>
-              <th>Last four</th>
+              <th>Card number</th>
               <th>Expiry</th>
               <th>Cardholder</th>
             </tr>

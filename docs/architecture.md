@@ -26,7 +26,7 @@ highbridge lets an HTTPS web app start a document scan on the user's Windows PC 
 ## 2. Security model
 
 1. **Origin allowlist ("pairing"), the only user prompt.** Every API request must carry a browser `Origin`. Allowed origins are `https://…`, plus `http://localhost` and `http://127.0.0.1` for development (this can be turned off by policy). `null`, `file://` and requests with no Origin are rejected.
-   - The first time a site calls `POST /v1/pair`, the tray app shows "Allow this website to use your scanners and card reader?". The dialog names both devices, the card fields that leave the machine (last four of the card number, expiry, cardholder name), and the stamp identity sentence. Approval version 3 is that wording.
+   - The first time a site calls `POST /v1/pair`, the tray app shows "Allow this website to use your scanners and card reader?". The dialog names both devices, the card fields sent to the site (full card number, expiry, cardholder name), and the stamp identity sentence. It says highbridge is a local program and does not send the card number anywhere else. Approval version 4 is that wording. A site still approved at version 3 is asked again before a card read.
    - A yes is saved to `%APPDATA%\Highbridge\settings.json`. Sites are removed in the tray menu's "Approved websites" window. **Devices** (also opened by double-clicking the tray icon) lists the scanners and card readers Windows can see.
    - A no is remembered for 10 minutes so a site can't spam prompts. Only one prompt is shown at a time, and it times out after 2 minutes.
    - Admins can pre-approve origins (no prompt at all), or turn pairing off, in `policy.json`.
@@ -99,7 +99,7 @@ Rule: nothing shipped may be GPL, LGPL, AGPL or "non-commercial", and no build t
 | .NET 10 runtime, ASP.NET Core, Windows Desktop (WinForms/WPF, System.Drawing) | all | MIT | Not bundled: the user installs Microsoft's x86 runtimes (framework-dependent publish). |
 | NTwain 3.7.6 | Highbridge.Twain | MIT | Pin ≥3.7. Earlier (≤3.5.x) NuGet metadata pointed to an external license file; do not use them. |
 | ZXing.Net 0.16.11 | Highbridge.Core | Apache-2.0 | Barcode detection. The core package only: no bindings, no native code. `lib/net9.0/zxing.dll` has no dependencies. |
-| Great.EmvTags 2.1.0 | Highbridge.Core | MIT | EMV TLV and PDOL parsing for card reads. highbridge still maps the allowlist (last four, expiry, cardholder name) and does not return the raw tags. |
+| Great.EmvTags 2.1.0 | Highbridge.Core | MIT | EMV TLV and PDOL parsing for card reads. highbridge returns the chip card number, expiry, and cardholder name to the paired page, and does not return the raw tags. |
 | TWAIN DSM (`TWAINDSM.dll`) | runtime, system | LGPL-2.1 | **Not redistributed**; installed by scanner drivers. |
 | WiX Toolset 5.0.2 (`wix` local .NET tool) | MSI build only | MS-RL | Not shipped: no WiX extensions or custom-action DLLs in the MSI. Do not move to v6+ (OSMF fee). |
 | xunit 2.9.x | tests only | Apache-2.0 | |

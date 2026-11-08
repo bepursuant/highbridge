@@ -17,9 +17,9 @@ public sealed class PairedOrigin
 
     /// <summary>
     /// Which approval wording the user accepted. Version 2 tells the user that stamped scans send
-    /// their Windows user name and computer name. Version 3 also tells them a card read sends the
-    /// last four digits of the card number, the expiry, and the cardholder name. Missing means an
-    /// older approval.
+    /// their Windows user name and computer name. Version 3 tells them a card read sends the last
+    /// four digits, the expiry, and the cardholder name. Version 4 tells them the full card number
+    /// is sent to the site over the local connection. Missing means an older approval.
     /// </summary>
     public int? ApprovalVersion { get; set; }
 }
@@ -45,6 +45,7 @@ public sealed class HighbridgePolicy
 {
     /// <summary>
     /// Origins that are treated as paired without prompting. A listed origin may scan and read cards.
+    /// A card read includes the full card number, delivered only over the local API.
     /// </summary>
     public List<string> AllowedOrigins { get; set; } = [];
 
