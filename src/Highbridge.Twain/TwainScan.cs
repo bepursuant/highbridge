@@ -171,9 +171,19 @@ internal sealed class TwainScan
 
         if (_options.EffectivePageLimit() is int limit && _pages.Count >= limit)
         {
-            _logger.LogInformation("Reached {Limit} page(s); canceling the remaining transfers", limit);
-            e.CancelAll = true;
-            return;
+            if (_negotiated.SheetCountedFeeder)
+            {
+                // MSG_RESET (CancelAll) aborts a sheet PaperStream has already picked and
+                // crashes the fi-8170. CAP_XFERCOUNT was set to one sheet, so this is only a
+                // stray image; it is dropped in AddPage and the feeder is left alone.
+                _logger.LogInformation("Reached {Limit} page(s). Not resetting the feeder; this driver crashes if a picked sheet is aborted", limit);
+            }
+            else
+            {
+                _logger.LogInformation("Reached {Limit} page(s); canceling the remaining transfers", limit);
+                e.CancelAll = true;
+                return;
+            }
         }
 
         try
@@ -313,6 +323,12 @@ internal sealed class TwainScan
 
     private void AddPage(ScannedPage page)
     {
+        if (_negotiated.SheetCountedFeeder && _options.EffectivePageLimit() is int limit && _pages.Count >= limit)
+        {
+            _logger.LogInformation("Ignoring page {Page}; the one-sheet limit is {Limit} and this feeder cannot be reset", _pages.Count + 1, limit);
+            return;
+        }
+
         _pages.Add(page);
         Progress($"received page {_pages.Count}");
         _logger.LogInformation("Page {Page}: {Width} x {Height} px, {Bytes} bytes {MediaType}", _pages.Count, page.Width, page.Height, page.Data.Length, page.MediaType);
