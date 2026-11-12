@@ -3,8 +3,8 @@ export declare const DEFAULT_PORT: 47116;
 export type ColorMode = 'color' | 'gray' | 'blackWhite';
 export type PaperSource = 'auto' | 'flatbed' | 'feeder';
 export type ScanStatus = 'queued' | 'scanning' | 'completed' | 'failed' | 'canceled';
-/** Only 'png' (one image per page) today. */
-export type OutputFormat = 'png';
+/** 'png' is one image per page and the default. 'pdf' is one document for that scan. */
+export type OutputFormat = 'png' | 'pdf';
 
 export type StampPosition = 'top' | 'bottom';
 
@@ -148,6 +148,9 @@ export interface ScanJob {
 
 export interface ScanResult {
   id: string;
+  format?: OutputFormat;
+  /** Images the scanner delivered. A PDF result is still one blob in `pages`. */
+  pagesScanned?: number;
   pages: Array<PageInfo & { blob: Blob }>;
   stamp?: StampInfo;
   /** Every page's barcodes in page order; only when the scan asked for barcodes. */

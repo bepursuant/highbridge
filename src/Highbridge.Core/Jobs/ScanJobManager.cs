@@ -123,7 +123,7 @@ public sealed class ScanJobManager : IDisposable
         }
 
         _logger.LogInformation(
-            "Scan {JobId} started for {Origin} ({Trigger}): scanner={Scanner} dpi={Dpi} color={Color} source={Source} duplex={Duplex} oneSheet={OneSheet} driverUi={DriverUi} maxPages={MaxPages} barcodes={Barcodes}",
+            "Scan {JobId} started for {Origin} ({Trigger}): scanner={Scanner} dpi={Dpi} color={Color} source={Source} duplex={Duplex} oneSheet={OneSheet} driverUi={DriverUi} maxPages={MaxPages} format={Format} barcodes={Barcodes}",
             job.Id,
             origin,
             trigger,
@@ -135,6 +135,7 @@ public sealed class ScanJobManager : IDisposable
             options.OneSheet,
             options.ShowDriverUi,
             options.MaxPages,
+            options.Format,
             options.Barcodes);
         _ = Task.Run(() => RunAsync(job));
         return job;
@@ -199,7 +200,9 @@ public sealed class ScanJobManager : IDisposable
         // Barcodes are read from a copy of the page exactly as the scanner delivered it.
         // That copy is taken here, before a stamp replaces the image that gets published.
         job.Barcodes?.Enqueue(page, _barcodeWorker, job.Cancellation.Token);
-        if (job.Stamp is null)
+        // A PDF is one file for this job, so the page images stay unpublished until it is built.
+        // A stamp waits for the same reason: the band says "page N of M".
+        if (job.Stamp is null && job.Options.Format != OutputFormat.Pdf)
         {
             job.AddPage(page);
             return;
@@ -258,9 +261,22 @@ public sealed class ScanJobManager : IDisposable
                 return;
             }
 
+            IReadOnlyList<ScannedPage> images = pages;
             if (job.Stamp is { } stamp)
             {
-                await StampAsync(job, stamp, pages, held, ct).ConfigureAwait(false);
+                images = await StampAsync(job, stamp, pages, held, ct).ConfigureAwait(false);
+            }
+
+            if (job.Options.Format == OutputFormat.Pdf)
+            {
+                // This job only. The next scan, including the next sheet of a session, builds its own file.
+                byte[] pdf = ScanPdf.Create(images, job.Options.Dpi);
+                var first = images[0];
+                job.PublishDocument(new ScannedPage(0, OutputFormats.PdfMediaType, first.Width, first.Height, pdf));
+            }
+            else if (job.Stamp is not null)
+            {
+                job.ReleaseHeldPages(images);
             }
 
             if (job.Barcodes is { } barcodes)
@@ -296,7 +312,7 @@ public sealed class ScanJobManager : IDisposable
         }
     }
 
-    private async Task StampAsync(ScanJob job, StampOptions stamp, IReadOnlyList<ScannedPage> pages, List<ReceivedPage> held, CancellationToken ct)
+    private async Task<IReadOnlyList<ScannedPage>> StampAsync(ScanJob job, StampOptions stamp, IReadOnlyList<ScannedPage> pages, List<ReceivedPage> held, CancellationToken ct)
     {
         IReadOnlyList<ReceivedPage> received;
         lock (held)
@@ -308,10 +324,9 @@ public sealed class ScanJobManager : IDisposable
         string scanner = received.All(p => !string.IsNullOrWhiteSpace(p.Page.ScannerName))
             ? string.Empty
             : await ScannerNameAsync(job.Options.ScannerId, ct).ConfigureAwait(false);
-        var stamped = await Task.Run(
+        return await Task.Run(
             () => _provenance.StampAll(received, stamp, job.Origin, job.ScanId!, scanner, job.Options.Dpi, _time.LocalTimeZone),
             ct).ConfigureAwait(false);
-        job.ReleaseHeldPages(stamped);
     }
 
     private async Task<string> ScannerNameAsync(string? scannerId, CancellationToken ct)

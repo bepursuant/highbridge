@@ -89,7 +89,7 @@ public sealed class ProvenanceStamping
         for (int i = 0; i < pages.Count; i++)
         {
             var (page, receivedAt) = pages[i];
-            if (page.MediaType != "image/png")
+            if (page.MediaType != OutputFormats.PngMediaType)
             {
                 throw new ScannerException("stamp_failed", $"Cannot stamp {page.MediaType} pages.");
             }

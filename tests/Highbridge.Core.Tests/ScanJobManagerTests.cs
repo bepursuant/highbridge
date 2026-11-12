@@ -1,6 +1,8 @@
+using PdfSharp.Pdf.IO;
 using Highbridge.Configuration;
 using Highbridge.Consent;
 using Highbridge.Jobs;
+using Highbridge.Provenance;
 using Highbridge.Scanning;
 using Highbridge.Security;
 
@@ -227,6 +229,45 @@ public class ScanJobManagerTests
         await waiting.Finished.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(ScanJobStatus.Completed, waiting.Status);
         Assert.Equal(2, waiting.Pages.Count);
+    }
+
+    [Fact]
+    public async Task Pdf_one_sheet_is_one_document_and_the_next_sheet_is_another()
+    {
+        var mock = new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.Zero, FeederSheets = 3 });
+        using var runtime = TestRuntime.Create(backend: mock);
+        runtime.Origins.Pair(Origin);
+        var options = new ScanOptions { Source = PaperSource.Feeder, Duplex = true, OneSheet = true, Format = OutputFormat.Pdf };
+
+        var first = runtime.Jobs.Start(Origin, options, ScanTrigger.Api);
+        await first.Finished.WaitAsync(TimeSpan.FromSeconds(5));
+        var second = runtime.Jobs.Start(Origin, options, ScanTrigger.Api);
+        await second.Finished.WaitAsync(TimeSpan.FromSeconds(5));
+        var stamped = runtime.Jobs.Start(Origin, options with { Stamp = new StampOptions() }, ScanTrigger.Api);
+        await stamped.Finished.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(ScanJobStatus.Completed, first.Status);
+        Assert.Equal(2, first.PagesScanned);
+        Assert.Equal("application/pdf", Assert.Single(first.Pages).MediaType);
+        Assert.Equal(2, PdfPages(first.Pages[0].Data));
+        Assert.Equal(2, second.PagesScanned);
+        Assert.Equal(2, PdfPages(second.Pages[0].Data));
+        Assert.NotEqual(first.Pages[0].Data, second.Pages[0].Data);
+        Assert.Equal(ScanJobStatus.Completed, stamped.Status);
+        Assert.Equal(2, PdfPages(stamped.Pages[0].Data));
+
+        mock.LoadSheets(1);
+        var png = runtime.Jobs.Start(Origin, options with { Format = OutputFormat.Png, Stamp = null }, ScanTrigger.Api);
+        await png.Finished.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(2, png.Pages.Count);
+        Assert.All(png.Pages, page => Assert.Equal("image/png", page.MediaType));
+        Assert.Equal(2, png.PagesScanned);
+    }
+
+    private static int PdfPages(byte[] pdf)
+    {
+        using var document = PdfReader.Open(new MemoryStream(pdf), PdfDocumentOpenMode.Import);
+        return document.PageCount;
     }
 
     [Fact]

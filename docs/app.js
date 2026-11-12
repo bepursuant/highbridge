@@ -105,6 +105,7 @@ function readOptions() {
     showDriverUi: data.get('showDriverUi') === 'on',
     stamp: data.get('stamp') ? { position: data.get('stamp') } : undefined,
     ...(data.get('barcodes') === 'on' ? { barcodes: true } : {}),
+    format: data.get('format') || 'png',
   };
 }
 
@@ -178,11 +179,13 @@ function convexHull(points) {
 
 const BARCODE_STATUS = { partial: ' (search stopped early)', failed: ' (could not be analysed)', skipped: ' (not analysed)' };
 
-function renderBarcodes(barcodes, firstNumber) {
+function renderBarcodes(barcodes, firstNumber, asDocument) {
   const rows = $('barcode-rows');
   for (const code of barcodes) {
     const row = rows.insertRow();
-    row.insertCell().textContent = String(firstNumber + code.page);
+    row.insertCell().textContent = asDocument
+      ? `Document ${firstNumber}, page ${code.page + 1}`
+      : String(firstNumber + code.page);
     row.insertCell().textContent = code.format;
     row.insertCell().textContent = code.text;
     row.insertCell().textContent = code.orientation === undefined ? `found at ${code.rotation}°` : `${code.orientation}°`;
@@ -190,8 +193,39 @@ function renderBarcodes(barcodes, firstNumber) {
   $('barcodes').hidden = rows.rows.length === 0;
 }
 
-function renderPages(pages, barcodes) {
+function renderPdf(page, number, pagesScanned) {
+  const url = URL.createObjectURL(page.blob);
+  objectUrls.push(url);
+  const item = document.createElement('li');
+  item.className = 'page pdf';
+  const sides = Number(pagesScanned) || 0;
+  item.innerHTML = `
+    <iframe class="pdf-view" title=""></iframe>
+    <div class="meta">
+      <strong>Document ${number}</strong>
+      <span></span>
+      <a class="download">Download</a>
+    </div>`;
+  const frame = item.querySelector('iframe');
+  frame.title = `Scanned document ${number}`;
+  frame.src = url;
+  item.querySelector('span').textContent = `${sides ? `${sides} page${sides === 1 ? '' : 's'} · ` : ''}${(page.size / 1024).toFixed(0)} KB`;
+  const download = item.querySelector('.download');
+  download.href = url;
+  download.download = `scan-document-${number}.pdf`;
+  pagesList.append(item);
+}
+
+function renderPages(pages, barcodes, pagesScanned) {
+  const documentPdf = pages.length === 1 && pages[0].mediaType === 'application/pdf';
   const firstNumber = pagesList.children.length + 1;
+  if (documentPdf) {
+    renderPdf(pages[0], firstNumber, pagesScanned);
+    if (barcodes) renderBarcodes(barcodes, firstNumber, true);
+    empty.hidden = pagesList.children.length > 0;
+    clearButton.hidden = pagesList.children.length === 0;
+    return;
+  }
   for (const page of pages) {
     const url = URL.createObjectURL(page.blob);
     objectUrls.push(url);
@@ -266,7 +300,11 @@ function scanProgress(job, options) {
 
 function describeScan(result) {
   const found = result.barcodes ? ` · ${result.barcodes.length} barcode(s)` : '';
-  let text = `${result.pages.length} page(s)${found}`;
+  const pdf = result.format === 'pdf' || result.pages[0]?.mediaType === 'application/pdf';
+  const sides = Number(result.pagesScanned) || 0;
+  let text = pdf
+    ? `1 document${sides ? ` (${sides} page${sides === 1 ? '' : 's'})` : ''}${found}`
+    : `${result.pages.length} page(s)${found}`;
   if (result.stamp) text += ` · stamped (${result.stamp.scanId}${result.stamp.requiredByPolicy ? ', required by policy' : ''})`;
   return text;
 }
@@ -282,7 +320,7 @@ form.addEventListener('submit', async (event) => {
     const result = await client.scan(options, {
       onProgress: (job) => { progress.textContent = scanProgress(job, options); },
     });
-    renderPages(result.pages, result.barcodes);
+    renderPages(result.pages, result.barcodes, result.pagesScanned);
     progress.textContent = `Done · ${describeScan(result)}`;
     if (scannerSelect.disabled) loadScanners().catch(() => {});
   } catch (err) {
@@ -307,7 +345,7 @@ scanStart.addEventListener('click', async () => {
       onProgress: (job) => { progress.textContent = `Session · ${scanProgress(job, readOptions())}`; },
       onResult: (result) => {
         passes += 1;
-        renderPages(result.pages, result.barcodes);
+        renderPages(result.pages, result.barcodes, result.pagesScanned);
         progress.textContent = `Session · pass ${passes} · ${describeScan(result)}`;
       },
     });

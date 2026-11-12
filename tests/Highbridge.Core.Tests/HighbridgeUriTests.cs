@@ -45,6 +45,20 @@ public class HighbridgeUriTests
     }
 
     [Fact]
+    public void Pdf_format_round_trips_and_png_stays_the_default()
+    {
+        var options = new ScanOptions { Source = PaperSource.Feeder, Duplex = true, OneSheet = true, Format = OutputFormat.Pdf };
+        string url = HighbridgeUri.BuildScan("https://app.example.com", RequestId, options);
+
+        Assert.Contains("format=pdf", url, StringComparison.Ordinal);
+        Assert.True(HighbridgeUri.TryParse(url, out var command, out string? error), error);
+        Assert.Equal(options, command!.Options);
+        Assert.Equal(OutputFormat.Png, new ScanOptions().Format);
+        Assert.True(OutputFormats.TryParse("PDF", out var parsed));
+        Assert.Equal(OutputFormat.Pdf, parsed);
+    }
+
+    [Fact]
     public void One_sheet_round_trips_and_stays_off_when_omitted()
     {
         var options = new ScanOptions { Source = PaperSource.Feeder, Duplex = true, OneSheet = true };
@@ -96,7 +110,7 @@ public class HighbridgeUriTests
     [InlineData("highbridge://scan?origin=https%3A%2F%2Fa.example&request=0123456789abcdef&source=1", "unknown source")]
     [InlineData("highbridge://scan?origin=https%3A%2F%2Fa.example&request=0123456789abcdef&duplex=maybe", "duplex must be true or false")]
     [InlineData("highbridge://scan?origin=https%3A%2F%2Fa.example&request=0123456789abcdef&oneSheet=maybe", "oneSheet must be true or false")]
-    [InlineData("highbridge://scan?origin=https%3A%2F%2Fa.example&request=0123456789abcdef&format=pdf", "unknown format 'pdf'")]
+    [InlineData("highbridge://scan?origin=https%3A%2F%2Fa.example&request=0123456789abcdef&format=tiff", "unknown format 'tiff'")]
     public void Rejects_invalid_urls(string url, string expectedError)
     {
         Assert.False(HighbridgeUri.TryParse(url, out _, out string? error));

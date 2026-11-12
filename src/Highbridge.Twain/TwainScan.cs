@@ -301,7 +301,7 @@ internal sealed class TwainScan
             if (_strips is { IsEmpty: false } strips)
             {
                 _strips = null;
-                AddPage(new ScannedPage(_pages.Count, OutputFormats.MediaType(_options.Format), strips.Width, strips.Height, strips.ToPng()) { ScannerName = _source?.Name });
+                AddPage(PngPage(strips.Width, strips.Height, strips.ToPng()));
             }
 
             if (_encodedStrips is { Length: > 0 } encoded)
@@ -337,16 +337,28 @@ internal sealed class TwainScan
 
     private ScannedPage Encode(Stream image)
     {
+        // A PDF job is assembled once every page of that job is in. The transfer itself is the
+        // page image, same as PNG, so stamps and barcodes can read it.
         var encoding = _options.Format switch
         {
-            OutputFormat.Png => ImageFormat.Png,
+            OutputFormat.Png or OutputFormat.Pdf => ImageFormat.Png,
             _ => throw new ScannerException("unsupported_format", $"highbridge cannot produce {_options.Format} pages."),
         };
 
         using var decoded = Image.FromStream(image);
         using var output = new MemoryStream();
         decoded.Save(output, encoding);
-        return new ScannedPage(_pages.Count, OutputFormats.MediaType(_options.Format), decoded.Width, decoded.Height, output.ToArray()) { ScannerName = _source?.Name };
+        return PngPage(decoded.Width, decoded.Height, output.ToArray());
+    }
+
+    private ScannedPage PngPage(int width, int height, byte[] png)
+    {
+        if (_options.Format is not (OutputFormat.Png or OutputFormat.Pdf))
+        {
+            throw new ScannerException("unsupported_format", $"highbridge cannot produce {_options.Format} pages.");
+        }
+
+        return new ScannedPage(_pages.Count, OutputFormats.PngMediaType, width, height, png) { ScannerName = _source?.Name };
     }
 
     private void Complete()
