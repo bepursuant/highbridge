@@ -97,14 +97,15 @@ public sealed class CardReadManager : IDisposable
         }
 
         _logger.LogInformation(
-            "Card read {JobId} started for {Origin} ({Trigger}): reader={Reader} interface={Interface} aid={Aid} waitMs={Wait}",
+            "Card read {JobId} started for {Origin} ({Trigger}): reader={Reader} interface={Interface} aid={Aid} waitMs={Wait} waitForRemoval={Removal}",
             job.Id,
             origin,
             trigger,
             options.ReaderId ?? "(any)",
             options.Interface,
             options.NormalizedAid ?? "(none)",
-            options.WaitForCardMs);
+            options.WaitForCardMs,
+            options.WaitForRemoval);
         _ = Task.Run(() => RunAsync(job));
         return job;
     }
@@ -189,6 +190,14 @@ public sealed class CardReadManager : IDisposable
         try
         {
             job.SetStatus(CardReadStatus.Reading);
+            if (job.Options.WaitForRemoval)
+            {
+                // Outside the read budget: the card may sit in the slot for the whole session.
+                // Stop cancels this wait. The card number is not logged.
+                _logger.LogInformation("Card read {JobId} is waiting for the card to leave the slot", job.Id);
+                await _backend.WaitForCardRemovalAsync(job.Options, ct).ConfigureAwait(false);
+            }
+
             var budget = TimeSpan.FromMilliseconds(job.Options.WaitForCardMs) + ReadSlack;
             var result = await _backend.ReadAsync(job.Options, ct).WaitAsync(budget, _time, ct).ConfigureAwait(false);
             Complete(job, CardReadStatus.Completed, result);

@@ -45,6 +45,18 @@ public class HighbridgeUriTests
     }
 
     [Fact]
+    public void One_sheet_round_trips_and_stays_off_when_omitted()
+    {
+        var options = new ScanOptions { Source = PaperSource.Feeder, Duplex = true, OneSheet = true };
+        string url = HighbridgeUri.BuildScan("https://app.example.com", RequestId, options);
+
+        Assert.Contains("oneSheet=true", url, StringComparison.Ordinal);
+        Assert.True(HighbridgeUri.TryParse(url, out var command, out string? error), error);
+        Assert.Equal(options, command!.Options);
+        Assert.False(new ScanOptions().OneSheet);
+    }
+
+    [Fact]
     public void Barcode_options_round_trip_and_bad_ones_are_rejected()
     {
         var options = new ScanOptions { Barcodes = true, BarcodeFormats = BarcodeFormat.QrCode | BarcodeFormat.Code128 | BarcodeFormat.Ean13 };
@@ -83,6 +95,7 @@ public class HighbridgeUriTests
     [InlineData("highbridge://scan?origin=https%3A%2F%2Fa.example&request=0123456789abcdef&colorMode=sepia", "unknown colorMode")]
     [InlineData("highbridge://scan?origin=https%3A%2F%2Fa.example&request=0123456789abcdef&source=1", "unknown source")]
     [InlineData("highbridge://scan?origin=https%3A%2F%2Fa.example&request=0123456789abcdef&duplex=maybe", "duplex must be true or false")]
+    [InlineData("highbridge://scan?origin=https%3A%2F%2Fa.example&request=0123456789abcdef&oneSheet=maybe", "oneSheet must be true or false")]
     [InlineData("highbridge://scan?origin=https%3A%2F%2Fa.example&request=0123456789abcdef&format=pdf", "unknown format 'pdf'")]
     public void Rejects_invalid_urls(string url, string expectedError)
     {

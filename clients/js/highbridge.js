@@ -14,6 +14,7 @@
 /** highbridge always listens on this port. Override it only to test against a dev host. */
 export const DEFAULT_PORT = 47116;
 const TERMINAL = new Set(['completed', 'failed', 'canceled']);
+const FEEDER_RETRY = new Set(['no_pages', 'no_paper', 'feeder_empty']);
 const PAIRED_HINT_KEY = 'highbridge.paired';
 
 export class HighbridgeError extends Error {
@@ -118,7 +119,9 @@ export class HighbridgeClient {
 
   /**
    * Scans and returns the pages as Blobs.
-   * @param {object} [options] scannerId, dpi, colorMode ('color'|'gray'|'blackWhite'), source ('auto'|'flatbed'|'feeder'), duplex, showDriverUi, maxPages, format ('png'),
+   * @param {object} [options] scannerId, dpi, colorMode ('color'|'gray'|'blackWhite'), source ('auto'|'flatbed'|'feeder'), duplex,
+   *   oneSheet (one feeder sheet per job: front and back when duplex; an empty feeder waits),
+   *   showDriverUi, maxPages, format ('png'),
    *   stamp ({ position: 'top'|'bottom' } adds highbridge's provenance band; each page then has `provenance`),
    *   barcodes (true to find barcodes: each page then has `barcodeStatus` and `barcodes`, and the result a flat `barcodes`),
    *   barcodeFormats (e.g. ['qrCode', 'code128']; default: all common formats)
@@ -166,6 +169,7 @@ export class HighbridgeClient {
     const result = { id: job.id, pages };
     if (job.stamp) result.stamp = job.stamp;
     if (job.barcodes) result.barcodes = job.barcodes;
+    if (typeof job.usedFeeder === 'boolean') result.usedFeeder = job.usedFeeder;
     return result;
   }
 
@@ -236,6 +240,94 @@ export class HighbridgeClient {
       applications: job.applications,
       selected: job.selected,
     };
+  }
+
+  /**
+   * Arms a scan session: the same POST and status poll as {@link scan}, repeated until Stop,
+   * a flatbed (always one shot), or an error that needs a person. With `oneSheet`, each cycle is
+   * one feeder sheet and an empty feeder keeps the session armed. Options are read again each
+   * cycle when `options` is a function. `pollIntervalMs` is unchanged.
+   * @param {object|(() => object)} options
+   * @param {object} [hooks]
+   * @param {(result: object) => void} [hooks.onResult]
+   * @param {(job: object) => void} [hooks.onProgress]
+   * @param {AbortSignal} [hooks.signal]
+   */
+  async scanSession(options, { onResult, onProgress, signal } = {}) {
+    for (;;) {
+      if (signal?.aborted) return;
+      const current = currentOptions(options);
+      const loop = current.oneSheet === true && current.source !== 'flatbed';
+      let jobId;
+      try {
+        const result = await this.scan(current, {
+          signal,
+          onProgress: (job) => {
+            jobId = job.id;
+            onProgress?.(job);
+          },
+        });
+        onResult?.(result);
+        if (!loop || result.usedFeeder === false) return;
+      } catch (err) {
+        if (signal?.aborted || err?.code === 'aborted' || err?.code === 'canceled') {
+          if (jobId) this._json('DELETE', `/v1/scans/${jobId}`).catch(() => {});
+          return;
+        }
+        // The server waits on CAP_FEEDERLOADED. If a driver still reports an empty feeder,
+        // that does not end the session.
+        if (loop && FEEDER_RETRY.has(err?.code)) {
+          if (jobId) await this._json('DELETE', `/v1/scans/${jobId}`).catch(() => {});
+          await sleep(this.pollIntervalMs);
+          continue;
+        }
+        throw err;
+      }
+    }
+  }
+
+  /**
+   * Arms a card session: the same POST and status poll as {@link readCard}, repeated until Stop
+   * or an error that needs a person. After a card is read, the next read waits until that card
+   * has left the slot. Contact and contactless stay on the interface in `options` (auto, unless
+   * the form says otherwise). The card number is still only the completed job's field.
+   * @param {object|(() => object)} options
+   * @param {object} [hooks]
+   * @param {(result: object) => void} [hooks.onResult]
+   * @param {(job: object) => void} [hooks.onProgress]
+   * @param {AbortSignal} [hooks.signal]
+   */
+  async readCardSession(options, { onResult, onProgress, signal } = {}) {
+    let waitForRemoval = false;
+    for (;;) {
+      if (signal?.aborted) return;
+      const current = currentOptions(options);
+      const request = waitForRemoval ? { ...current, waitForRemoval: true } : current;
+      let jobId;
+      try {
+        const result = await this.readCard(request, {
+          signal,
+          onProgress: (job) => {
+            jobId = job.id;
+            onProgress?.(job);
+          },
+        });
+        onResult?.(result);
+        waitForRemoval = true;
+      } catch (err) {
+        if (signal?.aborted || err?.code === 'aborted' || err?.code === 'canceled') {
+          if (jobId) this._json('DELETE', `/v1/card-reads/${jobId}`).catch(() => {});
+          return;
+        }
+        // Nobody presented a card in this wait. Stay armed and try again.
+        if (err?.code === 'no_card') {
+          if (jobId) await this._json('DELETE', `/v1/card-reads/${jobId}`).catch(() => {});
+          await sleep(this.pollIntervalMs);
+          continue;
+        }
+        throw err;
+      }
+    }
   }
 
   async _startScan(options) {
@@ -407,6 +499,7 @@ export function buildScanUrl(origin, requestId, options = {}) {
     if (options[key] !== undefined && options[key] !== null) params.set(key, String(options[key]));
   }
   if (options.stamp) params.set('stamp', options.stamp.position ?? 'bottom');
+  if (options.oneSheet) params.set('oneSheet', 'true');
   if (options.barcodes) params.set('barcodes', 'true');
   if (Array.isArray(options.barcodeFormats)) params.set('barcodeFormats', options.barcodeFormats.join(','));
   return `highbridge://scan?${params}`;
@@ -440,6 +533,11 @@ function randomId() {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function currentOptions(options) {
+  const value = typeof options === 'function' ? options() : options;
+  return value && typeof value === 'object' ? value : {};
 }
 
 function safeLocalStorage() {

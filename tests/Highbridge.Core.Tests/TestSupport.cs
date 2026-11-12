@@ -53,4 +53,7 @@ internal sealed class CountingBackend(IScannerBackend inner) : IScannerBackend
         Interlocked.Increment(ref _scans);
         return inner.ScanAsync(options, onPage, cancellationToken);
     }
+
+    public Task<bool> WaitForFeederAsync(ScanOptions options, CancellationToken cancellationToken) =>
+        inner.WaitForFeederAsync(options, cancellationToken);
 }

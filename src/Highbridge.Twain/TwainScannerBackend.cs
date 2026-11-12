@@ -96,6 +96,84 @@ public sealed class TwainScannerBackend : IScannerBackend, IDisposable
         }
     }
 
+    public Task<bool> WaitForFeederAsync(ScanOptions options, CancellationToken cancellationToken)
+    {
+        if (!options.OneSheet || options.Source == PaperSource.Flatbed)
+        {
+            return Task.FromResult(false);
+        }
+
+        return WaitForFeederCoreAsync(options, cancellationToken);
+    }
+
+    /// <summary>
+    /// Opens the source, and if it is feeding, polls CAP_FEEDERLOADED until a sheet is there.
+    /// The TWAIN thread is not blocked between checks, and this wait is not the scan watchdog.
+    /// </summary>
+    private async Task<bool> WaitForFeederCoreAsync(ScanOptions options, CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var thread = CurrentThread;
+        var holder = new OpenSource();
+        try
+        {
+            bool? loaded = await thread.InvokeAsync(() =>
+            {
+                holder.Session = TwainSessions.Open(thread, _logger);
+                holder.Source = TwainSessions.PickSource(holder.Session, options.ScannerId, _logger);
+                ReturnCode rc = holder.Source.Open();
+                if (rc != ReturnCode.Success)
+                {
+                    throw new ScannerException("scanner_unavailable", $"Could not open '{holder.Source.Name}'. Is it switched on and connected? ({rc})");
+                }
+
+                holder.Negotiator = new CapabilityNegotiator(holder.Source, holder.Session, _logger);
+                return holder.Negotiator.OneSheetFeeder(options);
+            }).ConfigureAwait(false);
+
+            if (loaded is null)
+            {
+                return false;
+            }
+
+            bool announced = false;
+            while (loaded == false)
+            {
+                if (!announced)
+                {
+                    _logger.LogInformation("CAP_FEEDERLOADED says the feeder is empty; waiting for a sheet");
+                    announced = true;
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(400), cancellationToken).ConfigureAwait(false);
+                loaded = await thread.InvokeAsync(() => holder.Negotiator!.FeederIsLoaded()).ConfigureAwait(false);
+            }
+
+            return true;
+        }
+        finally
+        {
+            Task close;
+            try
+            {
+                var session = holder.Session;
+                close = session is null
+                    ? Task.CompletedTask
+                    : thread.InvokeAsync(() =>
+                    {
+                        TwainSessions.Close(session, _logger);
+                        return true;
+                    });
+            }
+            catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException)
+            {
+                close = Task.CompletedTask;
+            }
+
+            await ReleaseWhenClosedAsync(close, thread).ConfigureAwait(false);
+        }
+    }
+
     /// <summary>
     /// Writes a report of the TWAIN setup: managers, installed and listed sources, and every
     /// capability of each source with its values. Opens each source but does not scan.
@@ -235,5 +313,12 @@ public sealed class TwainScannerBackend : IScannerBackend, IDisposable
         {
             _gate.Release();
         }
+    }
+
+    private sealed class OpenSource
+    {
+        public TwainSession? Session;
+        public DataSource? Source;
+        public CapabilityNegotiator? Negotiator;
     }
 }

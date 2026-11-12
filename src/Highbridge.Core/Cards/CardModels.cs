@@ -30,6 +30,12 @@ public sealed record CardReadOptions
 
     public int WaitForCardMs { get; init; } = DefaultWaitForCardMs;
 
+    /// <summary>
+    /// Before looking for a card, wait until the slot is empty. A session sets this after a
+    /// successful read so the same card is not read again. One-shot reads leave it off.
+    /// </summary>
+    public bool WaitForRemoval { get; init; }
+
     /// <summary>Uppercase hex AID with spaces removed, or null when <see cref="Aid"/> is absent.</summary>
     public string? NormalizedAid =>
         string.IsNullOrWhiteSpace(Aid) ? null : Aid.Replace(" ", "", StringComparison.Ordinal).ToUpperInvariant();
@@ -220,4 +226,11 @@ public interface ICardReaderBackend
 
     /// <summary>Reads one card. Throws <see cref="CardReaderException"/> with a page-safe message.</summary>
     Task<CardReadResult> ReadAsync(CardReadOptions options, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// When <see cref="CardReadOptions.WaitForRemoval"/> is set, blocks until the card has left
+    /// the slot. Does not read the card. Cancellation ends the wait; an empty slot returns at once.
+    /// </summary>
+    Task WaitForCardRemovalAsync(CardReadOptions options, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
 }

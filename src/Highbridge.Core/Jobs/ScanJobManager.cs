@@ -123,7 +123,7 @@ public sealed class ScanJobManager : IDisposable
         }
 
         _logger.LogInformation(
-            "Scan {JobId} started for {Origin} ({Trigger}): scanner={Scanner} dpi={Dpi} color={Color} source={Source} duplex={Duplex} driverUi={DriverUi} maxPages={MaxPages} barcodes={Barcodes}",
+            "Scan {JobId} started for {Origin} ({Trigger}): scanner={Scanner} dpi={Dpi} color={Color} source={Source} duplex={Duplex} oneSheet={OneSheet} driverUi={DriverUi} maxPages={MaxPages} barcodes={Barcodes}",
             job.Id,
             origin,
             trigger,
@@ -132,6 +132,7 @@ public sealed class ScanJobManager : IDisposable
             options.ColorMode,
             options.Source,
             options.Duplex,
+            options.OneSheet,
             options.ShowDriverUi,
             options.MaxPages,
             options.Barcodes);
@@ -240,6 +241,15 @@ public sealed class ScanJobManager : IDisposable
         try
         {
             job.SetStatus(ScanJobStatus.Scanning);
+            if (job.Options.OneSheet)
+            {
+                // The empty-feeder wait is not part of the scan timeout: a session stays armed
+                // until someone loads a sheet or cancels the job. The one-scan lock is unchanged.
+                job.UsedFeeder = job.Options.Source == PaperSource.Flatbed
+                    ? false
+                    : await _backend.WaitForFeederAsync(job.Options, ct).ConfigureAwait(false);
+            }
+
             var held = new List<ReceivedPage>();
             var pages = await _backend.ScanAsync(job.Options, page => OnPage(job, page, held), ct).WaitAsync(_scanTimeout, _time, ct).ConfigureAwait(false);
             if (pages.Count == 0)

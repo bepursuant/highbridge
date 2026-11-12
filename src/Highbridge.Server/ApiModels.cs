@@ -58,6 +58,9 @@ public sealed record ScanJobResponse(
     /// <summary>Pages received so far; ahead of <see cref="Pages"/> while a stamped scan runs.</summary>
     public int PagesScanned { get; init; }
 
+    /// <summary>One-sheet jobs only. False when the scanner did not use the feeder.</summary>
+    public bool? UsedFeeder { get; init; }
+
     public static ScanJobResponse From(ScanJob job) => new(
         job.Id,
         job.Status,
@@ -71,6 +74,7 @@ public sealed record ScanJobResponse(
     {
         Stamp = job.Stamp is { } stamp ? new StampResponse(stamp.Position, job.StampRequiredByPolicy, job.ScanId!) : null,
         PagesScanned = job.PagesScanned,
+        UsedFeeder = job.UsedFeeder,
     };
 
     private static PageResponse WithBarcodes(PageResponse page, JobBarcodes? barcodes) =>

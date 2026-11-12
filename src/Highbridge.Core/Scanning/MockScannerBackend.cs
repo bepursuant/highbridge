@@ -38,10 +38,26 @@ public sealed class MockScannerBackend : IScannerBackend
     ];
 
     private readonly MockScannerOptions _options;
+    private readonly object _sheets = new();
+    private int _feederLeft;
+    private int _barcodeLeft;
 
     public MockScannerBackend(MockScannerOptions? options = null)
     {
         _options = options ?? new MockScannerOptions();
+        _feederLeft = _options.FeederSheets;
+        _barcodeLeft = _options.FeederSheets;
+    }
+
+    /// <summary>Refills the simulated feeder. A one-sheet scan waiting on an empty feeder then continues.</summary>
+    public void LoadSheets(int count)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(count);
+        lock (_sheets)
+        {
+            _feederLeft = count;
+            _barcodeLeft = count;
+        }
     }
 
     public string Name => "mock";
@@ -63,12 +79,15 @@ public sealed class MockScannerBackend : IScannerBackend
             throw new ScannerException("paper_jam", "The scanner reported a paper jam.");
         }
 
-        bool useFeeder = options.Source == PaperSource.Feeder || (options.Source == PaperSource.Auto && scannerId is FeederId or BarcodesId);
+        bool useFeeder = UsesFeeder(options);
         bool duplex = useFeeder && options.Duplex;
-        int pageCount = useFeeder ? _options.FeederSheets * (duplex ? 2 : 1) : 1;
-        if (options.MaxPages > 0)
+        // One sheet consumes a sheet so the next job is the next sheet. Off, every scan still
+        // sees the configured stack, which is what the older tests and the one-shot button do.
+        int sheets = useFeeder ? (options.OneSheet ? TakeOneSheet(scannerId) : _options.FeederSheets) : 0;
+        int pageCount = useFeeder ? sheets * (duplex ? 2 : 1) : 1;
+        if (options.EffectivePageLimit() is int limit)
         {
-            pageCount = Math.Min(pageCount, options.MaxPages);
+            pageCount = Math.Min(pageCount, limit);
         }
 
         var pages = new List<ScannedPage>(pageCount);
@@ -83,6 +102,67 @@ public sealed class MockScannerBackend : IScannerBackend
         }
 
         return pages;
+    }
+
+    public async Task<bool> WaitForFeederAsync(ScanOptions options, CancellationToken cancellationToken)
+    {
+        if (!UsesFeeder(options))
+        {
+            return false;
+        }
+
+        if (!options.OneSheet)
+        {
+            return true;
+        }
+
+        string scannerId = options.ScannerId ?? FeederId;
+        while (SheetsLeft(scannerId) <= 0)
+        {
+            await Task.Delay(15, cancellationToken).ConfigureAwait(false);
+        }
+
+        return true;
+    }
+
+    private bool UsesFeeder(ScanOptions options)
+    {
+        string scannerId = options.ScannerId ?? FeederId;
+        return options.Source == PaperSource.Feeder
+            || (options.Source == PaperSource.Auto && scannerId is FeederId or BarcodesId);
+    }
+
+    private int SheetsLeft(string scannerId)
+    {
+        lock (_sheets)
+        {
+            return scannerId == BarcodesId ? _barcodeLeft : _feederLeft;
+        }
+    }
+
+    private int TakeOneSheet(string scannerId)
+    {
+        lock (_sheets)
+        {
+            if (scannerId == BarcodesId)
+            {
+                if (_barcodeLeft <= 0)
+                {
+                    return 0;
+                }
+
+                _barcodeLeft--;
+                return 1;
+            }
+
+            if (_feederLeft <= 0)
+            {
+                return 0;
+            }
+
+            _feederLeft--;
+            return 1;
+        }
     }
 
     private ScannedPage RenderPage(int index, int total, ScanOptions options, bool feeder, bool duplex)

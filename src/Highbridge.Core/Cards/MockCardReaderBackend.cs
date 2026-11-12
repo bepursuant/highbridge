@@ -28,6 +28,18 @@ public sealed class MockCardReaderBackend : ICardReaderBackend
         new(EmptyId, "highbridge mock reader with no payment apps", "mock"),
     ];
 
+    /// <summary>
+    /// Whether a card is sitting in the mock slot. A read with <see cref="CardReadOptions.WaitForRemoval"/>
+    /// waits until this is false. One-shot reads do not look at it.
+    /// </summary>
+    public bool CardPresent
+    {
+        get => Volatile.Read(ref _present) != 0;
+        set => Volatile.Write(ref _present, value ? 1 : 0);
+    }
+
+    private int _present = 1;
+
     public string Name => "mock";
 
     public Task<IReadOnlyList<CardReaderInfo>> ListReadersAsync(CancellationToken cancellationToken) =>
@@ -64,5 +76,29 @@ public sealed class MockCardReaderBackend : ICardReaderBackend
 
         var iface = options.Interface == CardInterface.Contactless ? CardInterface.Contactless : CardInterface.Contact;
         return Task.FromResult(new CardReadResult(new CardReaderRef(reader.Id, reader.Name), iface, apps, selected));
+    }
+
+    public async Task WaitForCardRemovalAsync(CardReadOptions options, CancellationToken cancellationToken)
+    {
+        if (!options.WaitForRemoval)
+        {
+            return;
+        }
+
+        string id = string.IsNullOrWhiteSpace(options.ReaderId) ? SuccessId : options.ReaderId;
+        if (Readers.All(reader => reader.Id != id))
+        {
+            throw CardReaderException.ReaderNotFound();
+        }
+
+        if (id == NoCardId)
+        {
+            return;
+        }
+
+        while (CardPresent)
+        {
+            await Task.Delay(15, cancellationToken).ConfigureAwait(false);
+        }
     }
 }

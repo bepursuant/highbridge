@@ -12,6 +12,8 @@ const client = new HighbridgeClient({
 const $ = (id) => document.getElementById(id);
 const form = $('scan-form');
 const scanButton = $('scan');
+const scanStart = $('scan-start');
+const scanStop = $('scan-stop');
 const connectButton = $('connect');
 const scannerSelect = $('scanner');
 const progress = $('progress');
@@ -99,6 +101,7 @@ function readOptions() {
     colorMode: data.get('colorMode'),
     source: data.get('source'),
     duplex: data.get('duplex') === 'on',
+    oneSheet: data.get('oneSheet') === 'on',
     showDriverUi: data.get('showDriverUi') === 'on',
     stamp: data.get('stamp') ? { position: data.get('stamp') } : undefined,
     ...(data.get('barcodes') === 'on' ? { barcodes: true } : {}),
@@ -241,39 +244,86 @@ connectButton.addEventListener('click', async () => {
   }
 });
 
+let scanControl = null;
+
+function setScanBusy(busy, session = false) {
+  scanButton.disabled = busy;
+  scanStart.disabled = busy;
+  scanStop.disabled = !session;
+  scanButton.classList.toggle('busy', busy && !session);
+  scanStart.classList.toggle('busy', busy && session);
+}
+
+function scanProgress(job, options) {
+  const scanned = job.pagesScanned ?? job.pages.length;
+  if (options.oneSheet && job.status === 'scanning' && !scanned) return 'Waiting for a sheet…';
+  if (job.status === 'scanning' && scanned) {
+    const reading = job.pages.filter((p) => p.barcodeStatus === 'pending').length;
+    return `Scanning… ${scanned} page(s) so far${reading ? ` · reading barcodes on ${reading}` : ''}`;
+  }
+  return STATUS_TEXT[job.status] ?? '';
+}
+
+function describeScan(result) {
+  const found = result.barcodes ? ` · ${result.barcodes.length} barcode(s)` : '';
+  let text = `${result.pages.length} page(s)${found}`;
+  if (result.stamp) text += ` · stamped (${result.stamp.scanId}${result.stamp.requiredByPolicy ? ', required by policy' : ''})`;
+  return text;
+}
+
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
+  if (scanControl) return;
   clearError(errorBox);
-  scanButton.disabled = true;
-  scanButton.classList.add('busy');
+  setScanBusy(true);
   progress.textContent = 'Contacting highbridge…';
   try {
-    const result = await client.scan(readOptions(), {
-      onProgress: (job) => {
-        progress.textContent = STATUS_TEXT[job.status] ?? '';
-        const scanned = job.pagesScanned ?? job.pages.length;
-        if (job.status === 'scanning' && scanned) {
-          const reading = job.pages.filter((p) => p.barcodeStatus === 'pending').length;
-          progress.textContent = `Scanning… ${scanned} page(s) so far${reading ? ` · reading barcodes on ${reading}` : ''}`;
-        }
-      },
+    const options = readOptions();
+    const result = await client.scan(options, {
+      onProgress: (job) => { progress.textContent = scanProgress(job, options); },
     });
     renderPages(result.pages, result.barcodes);
-    const found = result.barcodes ? ` · ${result.barcodes.length} barcode(s)` : '';
-    progress.textContent = `Done · ${result.pages.length} page(s)${found}`;
-    if (result.stamp) {
-      progress.textContent += ` · stamped (${result.stamp.scanId}${result.stamp.requiredByPolicy ? ', required by policy' : ''})`;
-    }
+    progress.textContent = `Done · ${describeScan(result)}`;
     if (scannerSelect.disabled) loadScanners().catch(() => {});
   } catch (err) {
     progress.textContent = '';
     showError(errorBox, err);
   } finally {
-    scanButton.disabled = false;
-    scanButton.classList.remove('busy');
+    setScanBusy(false);
     refreshStatus();
   }
 });
+
+scanStart.addEventListener('click', async () => {
+  if (scanControl) return;
+  clearError(errorBox);
+  scanControl = new AbortController();
+  setScanBusy(true, true);
+  progress.textContent = 'Session armed…';
+  let passes = 0;
+  try {
+    await client.scanSession(() => readOptions(), {
+      signal: scanControl.signal,
+      onProgress: (job) => { progress.textContent = `Session · ${scanProgress(job, readOptions())}`; },
+      onResult: (result) => {
+        passes += 1;
+        renderPages(result.pages, result.barcodes);
+        progress.textContent = `Session · pass ${passes} · ${describeScan(result)}`;
+      },
+    });
+    if (scanControl.signal.aborted) progress.textContent = passes ? progress.textContent : 'Stopped';
+    if (scannerSelect.disabled) loadScanners().catch(() => {});
+  } catch (err) {
+    progress.textContent = '';
+    showError(errorBox, err);
+  } finally {
+    scanControl = null;
+    setScanBusy(false);
+    refreshStatus();
+  }
+});
+
+scanStop.addEventListener('click', () => scanControl?.abort());
 
 clearButton.addEventListener('click', () => {
   objectUrls.splice(0).forEach((u) => URL.revokeObjectURL(u));
@@ -286,6 +336,8 @@ clearButton.addEventListener('click', () => {
 
 const cardForm = $('card-form');
 const readButton = $('read-card');
+const cardStart = $('card-start');
+const cardStop = $('card-stop');
 const cardConnect = $('card-connect');
 const readerSelect = $('reader');
 const cardProgress = $('card-progress');
@@ -451,31 +503,76 @@ cardConnect.addEventListener('click', async () => {
   }
 });
 
+let cardControl = null;
+
+function setCardBusy(busy, session = false) {
+  readButton.disabled = busy;
+  cardStart.disabled = busy;
+  cardStop.disabled = !session;
+  readButton.classList.toggle('busy', busy && !session);
+  cardStart.classList.toggle('busy', busy && session);
+}
+
+function describeCard(result) {
+  const name = result.selected.preferredName || result.selected.label || result.selected.aid;
+  return `${name} · ${result.selected.pan} · ${result.selected.expiry}`;
+}
+
 cardForm.addEventListener('submit', async (event) => {
   event.preventDefault();
+  if (cardControl) return;
   clearError(cardError);
-  readButton.disabled = true;
-  readButton.classList.add('busy');
+  setCardBusy(true);
   cardProgress.textContent = 'Contacting highbridge…';
   try {
     const result = await client.readCard(readCardOptions(), {
-      onProgress: (job) => {
-        cardProgress.textContent = CARD_STATUS[job.status] ?? '';
-      },
+      onProgress: (job) => { cardProgress.textContent = CARD_STATUS[job.status] ?? ''; },
     });
     renderCard(result);
-    const name = result.selected.preferredName || result.selected.label || result.selected.aid;
-    cardProgress.textContent = `Done · ${name} · ${result.selected.pan} · ${result.selected.expiry}`;
+    cardProgress.textContent = `Done · ${describeCard(result)}`;
     if (readerSelect.disabled) loadReaders().catch(() => {});
   } catch (err) {
     cardProgress.textContent = '';
     showError(cardError, err);
   } finally {
-    readButton.disabled = false;
-    readButton.classList.remove('busy');
+    setCardBusy(false);
     refreshStatus();
   }
 });
+
+cardStart.addEventListener('click', async () => {
+  if (cardControl) return;
+  clearError(cardError);
+  cardControl = new AbortController();
+  setCardBusy(true, true);
+  cardProgress.textContent = 'Session armed…';
+  let passes = 0;
+  try {
+    await client.readCardSession(() => readCardOptions(), {
+      signal: cardControl.signal,
+      onProgress: (job) => {
+        const waiting = job.status === 'reading' ? 'waiting for a card…' : (CARD_STATUS[job.status] ?? 'waiting…');
+        cardProgress.textContent = `Session · ${waiting}`;
+      },
+      onResult: (result) => {
+        passes += 1;
+        renderCard(result);
+        cardProgress.textContent = `Session · ${passes} card(s) · ${describeCard(result)}`;
+      },
+    });
+    if (cardControl.signal.aborted) cardProgress.textContent = passes ? cardProgress.textContent : 'Stopped';
+    if (readerSelect.disabled) loadReaders().catch(() => {});
+  } catch (err) {
+    cardProgress.textContent = '';
+    showError(cardError, err);
+  } finally {
+    cardControl = null;
+    setCardBusy(false);
+    refreshStatus();
+  }
+});
+
+cardStop.addEventListener('click', () => cardControl?.abort());
 
 cardClear.addEventListener('click', () => {
   cardApps.replaceChildren();

@@ -32,11 +32,21 @@ class FakeApp {
     if (method === 'POST' && pathname === '/v1/scans' && this.reapprove && JSON.parse(init.body ?? '{}').stamp) {
       return json(403, { error: 'approval_required', message: 'Approve this site again.' });
     }
-    if (method === 'POST' && pathname === '/v1/scans') return json(202, this.addJob('job123456789abcdef', JSON.parse(init.body ?? '{}')));
+    if (method === 'POST' && pathname === '/v1/scans') {
+      const body = JSON.parse(init.body ?? '{}');
+      const n = this.jobs.size + 1;
+      const id = n === 1 ? 'job123456789abcdef' : `job${n}23456789abcdef`;
+      return json(202, this.addJob(id, body));
+    }
     if (method === 'POST' && pathname === '/v1/card-reads' && this.reapprove) {
       return json(403, { error: 'approval_required', message: 'Approve this site again.' });
     }
-    if (method === 'POST' && pathname === '/v1/card-reads') return json(202, this.addCard(JSON.parse(init.body ?? '{}').requestId ?? 'card123456789abcdef', JSON.parse(init.body ?? '{}')));
+    if (method === 'POST' && pathname === '/v1/card-reads') {
+      const body = JSON.parse(init.body ?? '{}');
+      const n = this.cardJobs.size + 1;
+      const id = body.requestId ?? (n === 1 ? 'card123456789abcdef' : `card${n}23456789abcdef`);
+      return json(202, this.addCard(id, body));
+    }
 
     const cardMatch = pathname.match(/^\/v1\/card-reads\/([^/]+)$/);
     if (cardMatch) {
@@ -44,7 +54,7 @@ class FakeApp {
       if (!card) return json(404, { error: 'not_found', message: 'No such card read.' });
       if (method === 'DELETE') { this.deleted.push(card.id); return json(204, null); }
       card.polls += 1;
-      if (card.polls >= 2) card.status = 'completed';
+      if (card.polls >= 2) card.status = card.outcome ?? 'completed';
       return json(200, this.cardView(card));
     }
 
@@ -58,8 +68,13 @@ class FakeApp {
     return json(200, this.view(job));
   };
 
-  addCard(id, options) {
-    const job = { id, options, polls: 0, status: 'queued' };
+  addCard(id, options, outcome = 'completed', errorCode = 'read_failed') {
+    if (this.cardScript?.length) {
+      const scripted = this.cardScript.shift();
+      outcome = scripted.outcome ?? outcome;
+      errorCode = scripted.errorCode ?? errorCode;
+    }
+    const job = { id, options, polls: 0, status: 'queued', outcome, errorCode };
     this.cardJobs.set(id, job);
     return this.cardView(job);
   }
@@ -76,11 +91,17 @@ class FakeApp {
         aid: 'A0000000031010', label: 'VISA CREDIT', preferredName: 'Visa', priority: 1,
         pan: '4111111111111234', panLast4: '1234', expiry: '2028-12', cardholderName: 'DOE/JOHN',
       } : undefined,
+      ...(job.status === 'failed' ? { error: { error: job.errorCode, message: 'The card could not be read.' } } : {}),
     };
   }
 
-  addJob(id, options, outcome = 'completed') {
-    const job = { id, options, polls: 0, status: 'queued', outcome };
+  addJob(id, options, outcome = 'completed', errorCode = 'paper_jam') {
+    if (this.scanScript?.length) {
+      const scripted = this.scanScript.shift();
+      outcome = scripted.outcome ?? outcome;
+      errorCode = scripted.errorCode ?? errorCode;
+    }
+    const job = { id, options, polls: 0, status: 'queued', outcome, errorCode, usedFeeder: options.usedFeeder };
     this.jobs.set(id, job);
     return this.view(job);
   }
@@ -93,7 +114,7 @@ class FakeApp {
       trigger: 'api',
       format: 'png',
       createdAt: new Date().toISOString(),
-      error: job.status === 'failed' ? { error: 'paper_jam', message: 'The scanner reported a paper jam.' } : undefined,
+      error: job.status === 'failed' ? { error: job.errorCode ?? 'paper_jam', message: 'The scanner reported a paper jam.' } : undefined,
       pages: done ? [{
         index: 0,
         mediaType: 'image/png',
@@ -107,6 +128,7 @@ class FakeApp {
       pagesScanned: done ? 1 : 0,
       ...(job.options.stamp ? { stamp: { position: job.options.stamp.position ?? 'bottom', requiredByPolicy: false, scanId: 'PT-AAAA-BBBB' } } : {}),
       ...(job.options.barcodes && done ? { barcodes: found } : {}),
+      ...(typeof job.usedFeeder === 'boolean' ? { usedFeeder: job.usedFeeder } : {}),
     };
   }
 }
@@ -133,6 +155,8 @@ test('buildScanUrl encodes origin, request id and options', () => {
   assert.equal(parsed.searchParams.get('format'), 'png');
   assert.equal(parsed.searchParams.get('v'), '1');
   assert.equal(parsed.searchParams.get('barcodes'), null);
+  assert.equal(parsed.searchParams.get('oneSheet'), null);
+  assert.equal(new URL(buildScanUrl(ORIGIN, 'abc123abc123abc123', { oneSheet: true, duplex: true })).searchParams.get('oneSheet'), 'true');
 
   const withCodes = new URL(buildScanUrl(ORIGIN, 'abc123abc123abc123', { barcodes: true, barcodeFormats: ['qrCode', 'code128'] }));
   assert.equal(withCodes.searchParams.get('barcodes'), 'true');
@@ -307,6 +331,117 @@ test('buildReadCardUrl carries the card options and nothing else', () => {
   assert.equal(url.searchParams.get('aid'), 'A0000000031010');
   assert.equal(url.searchParams.get('waitForCardMs'), '5000');
   assert.equal(url.searchParams.get('apdu'), null);
+  assert.equal(url.searchParams.get('waitForRemoval'), null);
+  assert.equal(url.searchParams.get('pan'), null);
+  const flagged = new URL(buildReadCardUrl(ORIGIN, 'abc123abc123abc123', { waitForRemoval: true, pan: '4111111111111234' }));
+  assert.equal(flagged.searchParams.get('waitForRemoval'), null);
+  assert.equal(flagged.searchParams.get('pan'), null);
+});
+
+test('scanSession repeats one-sheet feeder scans and stops on a flatbed or abort', async () => {
+  const app = new FakeApp({ paired: true });
+  const posts = () => app.calls.filter((call) => call === 'POST /v1/scans').length;
+
+  await client(app).scanSession({ source: 'flatbed', oneSheet: true });
+  assert.equal(posts(), 1);
+
+  const again = new FakeApp({ paired: true });
+  let passes = 0;
+  const controller = new AbortController();
+  await client(again).scanSession({ oneSheet: true, source: 'feeder', duplex: true }, {
+    signal: controller.signal,
+    onResult: () => {
+      passes += 1;
+      if (passes === 2) controller.abort();
+    },
+  });
+  assert.equal(passes, 2);
+  assert.equal(again.calls.filter((call) => call === 'POST /v1/scans').length, 2);
+  assert.equal(again.jobs.get('job123456789abcdef').options.oneSheet, true);
+  assert.equal(again.jobs.get('job223456789abcdef').options.duplex, true);
+
+  const flat = new FakeApp({ paired: true });
+  let reads = 0;
+  await client(flat).scanSession(() => {
+    reads += 1;
+    return reads === 1 ? { oneSheet: true, source: 'feeder' } : { source: 'flatbed', oneSheet: true };
+  });
+  assert.equal(reads, 2);
+  assert.equal(flat.calls.filter((call) => call === 'POST /v1/scans').length, 2);
+});
+
+test('scanSession keeps going when the feeder is empty and stops on a jam', async () => {
+  const app = new FakeApp({ paired: true });
+  app.scanScript = [{ outcome: 'failed', errorCode: 'no_pages' }];
+  let passes = 0;
+  const controller = new AbortController();
+  await client(app).scanSession({ oneSheet: true, source: 'feeder' }, {
+    signal: controller.signal,
+    onResult: () => {
+      passes += 1;
+      controller.abort();
+    },
+  });
+  assert.equal(passes, 1);
+  assert.equal(app.calls.filter((call) => call === 'POST /v1/scans').length, 2);
+  assert.ok(app.deleted.includes('job123456789abcdef'));
+
+  const jammed = new FakeApp({ paired: true });
+  jammed.scanScript = [{ outcome: 'failed', errorCode: 'paper_jam' }];
+  await assert.rejects(
+    client(jammed).scanSession({ oneSheet: true, source: 'feeder' }),
+    (err) => err instanceof HighbridgeError && err.code === 'paper_jam',
+  );
+  assert.equal(jammed.calls.filter((call) => call === 'POST /v1/scans').length, 1);
+});
+
+test('a one-sheet scan that did not use the feeder is not repeated', async () => {
+  const app = new FakeApp({ paired: true });
+  await client(app).scanSession({ oneSheet: true, source: 'auto', usedFeeder: false });
+  assert.equal(app.calls.filter((call) => call === 'POST /v1/scans').length, 1);
+});
+
+test('readCardSession waits for removal and retries an empty reader', async () => {
+  const app = new FakeApp({ paired: true });
+  let passes = 0;
+  const controller = new AbortController();
+  await client(app).readCardSession({ interface: 'auto', waitForCardMs: 1000 }, {
+    signal: controller.signal,
+    onResult: () => {
+      passes += 1;
+      if (passes === 2) controller.abort();
+    },
+  });
+  assert.equal(passes, 2);
+  const jobs = [...app.cardJobs.values()];
+  assert.equal(jobs[0].options.waitForRemoval, undefined);
+  assert.equal(jobs[0].options.interface, 'auto');
+  assert.equal(jobs[1].options.waitForRemoval, true);
+  assert.equal(jobs[1].options.interface, 'auto');
+  assert.equal(app.calls.filter((call) => call === 'POST /v1/card-reads').length, 2);
+
+  const empty = new FakeApp({ paired: true });
+  empty.cardScript = [{ outcome: 'failed', errorCode: 'no_card' }];
+  passes = 0;
+  const stop = new AbortController();
+  await client(empty).readCardSession({ interface: 'contact' }, {
+    signal: stop.signal,
+    onResult: () => {
+      passes += 1;
+      stop.abort();
+    },
+  });
+  assert.equal(passes, 1);
+  assert.equal(empty.calls.filter((call) => call === 'POST /v1/card-reads').length, 2);
+  assert.equal([...empty.cardJobs.values()][1].options.waitForRemoval, undefined);
+
+  const failed = new FakeApp({ paired: true });
+  failed.cardScript = [{ outcome: 'failed', errorCode: 'read_failed' }];
+  await assert.rejects(
+    client(failed).readCardSession({ interface: 'auto' }),
+    (err) => err instanceof HighbridgeError && err.code === 'read_failed',
+  );
+  assert.equal(failed.calls.filter((call) => call === 'POST /v1/card-reads').length, 1);
 });
 
 test('stamped scan returns provenance and re-approves an old approval once', async () => {

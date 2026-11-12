@@ -51,6 +51,11 @@ export interface ScanOptions {
   colorMode?: ColorMode;
   source?: PaperSource;
   duplex?: boolean;
+  /**
+   * One feeder sheet per job. With duplex, that is the front and the back only. An empty feeder
+   * waits. Off, one job takes the whole feeder. A flatbed stays one shot.
+   */
+  oneSheet?: boolean;
   showDriverUi?: boolean;
   maxPages?: number;
   format?: OutputFormat;
@@ -137,6 +142,8 @@ export interface ScanJob {
   stamp?: StampInfo;
   /** Every page's barcodes in page order; only when the scan asked for barcodes. */
   barcodes?: Barcode[];
+  /** One-sheet jobs only. False when the scanner did not use the feeder. */
+  usedFeeder?: boolean;
 }
 
 export interface ScanResult {
@@ -145,6 +152,8 @@ export interface ScanResult {
   stamp?: StampInfo;
   /** Every page's barcodes in page order; only when the scan asked for barcodes. */
   barcodes?: Barcode[];
+  /** Copied from the job when the scan was one sheet. False means do not loop. */
+  usedFeeder?: boolean;
 }
 
 export type CardInterface = 'auto' | 'contact' | 'contactless';
@@ -156,6 +165,11 @@ export interface CardReadOptions {
   aid?: string;
   /** How long to wait for a card, 0–120000. Default 30000. */
   waitForCardMs?: number;
+  /**
+   * Wait until the slot is empty before looking for a card. `readCardSession` sets this after
+   * the first card so the same card is not read again.
+   */
+  waitForRemoval?: boolean;
 }
 
 export interface CardReaderInfo {
@@ -230,8 +244,24 @@ export declare class HighbridgeClient {
   connect(options?: { launch?: boolean }): Promise<AppStatus>;
   listScanners(): Promise<ScannerInfo[]>;
   scan(options?: ScanOptions, hooks?: { onProgress?: (job: ScanJob) => void; signal?: AbortSignal }): Promise<ScanResult>;
+  /**
+   * Repeats {@link scan} until Stop, a flatbed, or an error that needs a person.
+   * Pass a function to read form options again on every cycle.
+   */
+  scanSession(
+    options?: ScanOptions | (() => ScanOptions),
+    hooks?: { onResult?: (result: ScanResult) => void; onProgress?: (job: ScanJob) => void; signal?: AbortSignal },
+  ): Promise<void>;
   listCardReaders(): Promise<CardReaderInfo[]>;
   readCard(options?: CardReadOptions, hooks?: { onProgress?: (job: object) => void; signal?: AbortSignal }): Promise<CardReadResult>;
+  /**
+   * Repeats {@link readCard} until Stop or an error that needs a person. The next read waits
+   * until the card that was just read has left the slot.
+   */
+  readCardSession(
+    options?: CardReadOptions | (() => CardReadOptions),
+    hooks?: { onResult?: (result: CardReadResult) => void; onProgress?: (job: object) => void; signal?: AbortSignal },
+  ): Promise<void>;
 }
 
 export declare function buildScanUrl(origin: string, requestId: string, options?: ScanOptions): string;
