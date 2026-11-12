@@ -31,7 +31,7 @@ Status: **proof of concept** for Windows 10/11 workstations (32-bit build, PNG o
 ```
 
 1. **Pairing (once per site).** The first `POST /v1/pair` from a site shows *"Allow this website to use your scanners and card reader?"*. The prompt names both devices and says a card read sends the full card number, the expiry, and the cardholder name to that site over the local connection, and that a stamped scan includes the Windows user and computer name. This is the only highbridge prompt. Approved origins are saved in `%APPDATA%\Highbridge\settings.json` and can be removed in the tray menu's **Approved websites** window. The browser supplies the `Origin` header, so pages cannot fake it. Sites approved under older wording are asked again before the first card read.
-2. **Scanning.** `POST /v1/scans` from a paired site starts the scan right away. highbridge also asks the driver to hide its progress window (`CAP_INDICATORS`) unless the page asks for the driver UI. The page polls `GET /v1/scans/{id}` and downloads each page from `/v1/scans/{id}/pages/{n}`. Results stay in memory only, are visible only to the origin that requested them, and expire after 10 minutes.
+2. **Scanning.** `POST /v1/scans` from a paired site starts the scan right away. highbridge also asks the driver to hide its progress window (`CAP_INDICATORS`) unless the page asks for the driver UI. The page polls `GET /v1/scans/{id}` and downloads each page from `/v1/scans/{id}/pages/{n}`. PNG is one image per page. PDF is one file for that scan (a duplex sheet is the front and the back); the next scan is a new file. Results stay in memory only, are visible only to the origin that requested them, and expire after 10 minutes.
 3. **`highbridge://` links** start the app (`highbridge://launch`), queue a scan (`highbridge://scan?…`), or queue a card read (`highbridge://read-card?…`) for an *already paired* origin. The scanner or reader does not start until that origin's page polls the job over HTTP (within 30 seconds), so a forged link cannot run the device. A protocol link never carries data back, and it can never pair a site.
 4. **Browser permission.** Chrome, Edge and Firefox ask the user once to let a public site reach "apps on this device" (Local Network Access, loopback). The client sends `targetAddressSpace: 'loopback'` and should be called from a click.
 
@@ -42,16 +42,16 @@ Status: **proof of concept** for Windows 10/11 workstations (32-bit build, PNG o
 | `GET /v1/status` | `{app, version, apiVersion, backend, devices: [{kind, backend}], paired, pairingAllowed}`. `backend` stays the scanner backend |
 | `POST /v1/pair` | Ask the user to approve this site |
 | `GET /v1/scanners` | List scanners (paired sites only) |
-| `POST /v1/scans` | Body: `{scannerId?, dpi, colorMode: color\|gray\|blackWhite, source: auto\|flatbed\|feeder, duplex, oneSheet?, showDriverUi, maxPages, format: png, stamp?: {position: top\|bottom}, barcodes?, barcodeFormats?}`. Returns `202` with the job |
-| `GET /v1/scans/{id}` | Job status: `queued`, `scanning`, `completed`, `failed` or `canceled`, plus pages. With `barcodes: true`, also the barcodes found |
-| `GET /v1/scans/{id}/pages/{n}` | Page image (`image/png`) |
+| `POST /v1/scans` | Body: `{scannerId?, dpi, colorMode: color\|gray\|blackWhite, source: auto\|flatbed\|feeder, duplex, oneSheet?, showDriverUi, maxPages, format: png\|pdf, stamp?: {position: top\|bottom}, barcodes?, barcodeFormats?}`. Returns `202` with the job |
+| `GET /v1/scans/{id}` | Job status: `queued`, `scanning`, `completed`, `failed` or `canceled`, plus pages. With `barcodes: true`, also the barcodes found. A PDF job lists one document |
+| `GET /v1/scans/{id}/pages/{n}` | Page image (`image/png`), or the scan's PDF (`application/pdf`) when `format` is `pdf` |
 | `DELETE /v1/scans/{id}` | Discard or cancel a job |
 | `GET /v1/card-readers` | List readers (`{id, name, backend}`). No card-present flag. Current approval required |
 | `POST /v1/card-reads` | Body: `{readerId?, interface: auto\|contact\|contactless, aid?, waitForCardMs?, waitForRemoval?}`. Returns `202` with the job. No APDU fields |
 | `GET /v1/card-reads/{id}` | Job status: `queued`, `reading`, `completed`, `failed` or `canceled`. The card fields are inline when completed. Also claims a `highbridge://read-card` job |
 | `DELETE /v1/card-reads/{id}` | Discard or cancel a card read |
 
-`format` is optional and only `png` is accepted for now; the option exists so PDF can be added later without changing the API shape.
+`format` is optional. `png` (the default) is one image per page. `pdf` is one file for that scan job, pages in order: a one-sheet duplex scan is the front and the back. A later scan is its own file. Other values are rejected.
 
 `oneSheet: true` (also `oneSheet=true` on `highbridge://scan`) makes a feeder scan one sheet. With duplex, that is the front and the back only; further sheets stay for the next job. The job waits while the feeder is empty instead of failing. Off, one job still takes the whole feeder. A flatbed is one shot.
 

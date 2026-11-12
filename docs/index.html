@@ -78,6 +78,15 @@
         <label class="check"><input type="checkbox" name="duplex" /> Scan both sides (duplex)</label>
         <label class="check"><input type="checkbox" name="oneSheet" /> One sheet at a time</label>
         <p class="hint">On a duplex feeder, each scan is the front and the back of one sheet. Further sheets stay for the next pass. An empty feeder waits. Off, one scan takes the whole feeder. A flatbed is always a single scan.</p>
+
+        <label class="field">
+          <span>File</span>
+          <select name="format">
+            <option value="png" selected>PNG — one image per page</option>
+            <option value="pdf">PDF — one document per scan</option>
+          </select>
+        </label>
+        <p class="hint">PNG is the default. A PDF is one file for that scan. With duplex, the front and the back are two pages in that file. The next scan is a new file, not more pages in the previous one.</p>
         <label class="check"><input type="checkbox" name="showDriverUi" /> Use the scanner's own settings dialog</label>
         <label class="check"><input type="checkbox" name="barcodes" /> Find barcodes (QR, Data Matrix, PDF417, Code 128/39, EAN/UPC, ITF)</label>
 

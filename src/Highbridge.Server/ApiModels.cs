@@ -69,7 +69,7 @@ public sealed record ScanJobResponse(
         job.CreatedAt,
         job.FinishedAt,
         job.ErrorCode is null ? null : new ErrorResponse(job.ErrorCode, job.ErrorMessage ?? job.ErrorCode),
-        job.Pages.Select(p => WithBarcodes(new PageResponse(p.Index, p.MediaType, p.Width, p.Height, p.Data.Length, $"/v1/scans/{job.Id}/pages/{p.Index}", p.Provenance), job.Barcodes)).ToArray(),
+        job.Pages.Select(p => Describe(job, p)).ToArray(),
         job.Barcodes?.All)
     {
         Stamp = job.Stamp is { } stamp ? new StampResponse(stamp.Position, job.StampRequiredByPolicy, job.ScanId!) : null,
@@ -77,8 +77,19 @@ public sealed record ScanJobResponse(
         UsedFeeder = job.UsedFeeder,
     };
 
-    private static PageResponse WithBarcodes(PageResponse page, JobBarcodes? barcodes) =>
-        barcodes?.ForPage(page.Index) is { } found ? page with { BarcodeStatus = found.Status, Barcodes = found.Barcodes } : page;
+    private static PageResponse Describe(ScanJob job, ScannedPage page)
+    {
+        var response = new PageResponse(page.Index, page.MediaType, page.Width, page.Height, page.Data.Length, $"/v1/scans/{job.Id}/pages/{page.Index}", page.Provenance);
+        // A PDF is the whole job, not page 0. Barcodes stay on the job, each with its own page index.
+        if (page.MediaType == OutputFormats.PdfMediaType)
+        {
+            return response;
+        }
+
+        return job.Barcodes?.ForPage(page.Index) is { } found
+            ? response with { BarcodeStatus = found.Status, Barcodes = found.Barcodes }
+            : response;
+    }
 }
 
 public sealed record CardReadJobResponse(

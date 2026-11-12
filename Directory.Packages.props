@@ -2,9 +2,13 @@
   <!-- Every package here must be MIT/Apache-2.0/BSD-style. See THIRD-PARTY-NOTICES.md before adding one. -->
   <ItemGroup>
     <PackageVersion Include="NTwain" Version="3.7.6" />
+    <!-- 6.2.4 is the last MIT release. 6.5.0 and later are AGPL-3.0 and must not be used. -->
+    <PackageVersion Include="PDFsharp" Version="6.2.4" />
     <PackageVersion Include="ZXing.Net" Version="0.16.11" />
     <PackageVersion Include="Great.EmvTags" Version="2.1.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.14" />
+    <!-- PDFsharp 6.2.4 asks for 8.0.1, which has known vulnerabilities. 10.0.14 is the patched build. -->
+    <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="10.0.14" />
     <PackageVersion Include="Microsoft.AspNetCore.TestHost" Version="10.0.14" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageVersion Include="xunit" Version="2.9.3" />

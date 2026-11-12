@@ -145,11 +145,42 @@ test('e2e: readCard returns the mock card and the failure readers', { skip: !DLL
   await assert.rejects(client._json('POST', '/v1/card-reads', { apdu: '00A40400' }), (err) => err.code === 'invalid_options');
 });
 
-test('e2e: formats other than png are rejected', { skip: !DLL && 'set HIGHBRIDGE_DEVHOST_DLL' }, async () => {
+test('e2e: pdf is one document per scan and png pages still download', { skip: !DLL && 'set HIGHBRIDGE_DEVHOST_DLL' }, async () => {
+  const client = new HighbridgeClient({ port: PORT, fetch: withOrigin(ORIGIN), origin: ORIGIN, storage: null, pollIntervalMs: 50 });
+  await client.connect({ launch: false });
+
+  const first = await client.scan({ source: 'feeder', duplex: true, oneSheet: true, format: 'pdf' });
+  const second = await client.scan({ source: 'feeder', duplex: true, oneSheet: true, format: 'pdf' });
+  assert.equal(first.format, 'pdf');
+  assert.equal(first.pagesScanned, 2);
+  assert.equal(first.pages.length, 1);
+  assert.equal(first.pages[0].mediaType, 'application/pdf');
+  const firstPdf = new Uint8Array(await first.pages[0].blob.arrayBuffer());
+  const secondPdf = new Uint8Array(await second.pages[0].blob.arrayBuffer());
+  assert.equal(first.pages[0].blob.type, 'application/pdf');
+  assert.deepEqual([...firstPdf.slice(0, 4)], [0x25, 0x50, 0x44, 0x46]); // %PDF
+  assert.equal(pdfPageCount(firstPdf), 2);
+  assert.equal(second.pages.length, 1);
+  assert.equal(pdfPageCount(secondPdf), 2);
+  assert.notDeepEqual(firstPdf, secondPdf);
+
+  const png = await client.scan({ source: 'flatbed', scannerId: 'mock-flatbed' });
+  assert.equal(png.pages.length, 1);
+  assert.equal(png.pages[0].mediaType, 'image/png');
+  const pngBytes = new Uint8Array(await png.pages[0].blob.arrayBuffer());
+  assert.deepEqual([...pngBytes.slice(1, 4)], [80, 78, 71]);
+});
+
+test('e2e: unknown formats are rejected', { skip: !DLL && 'set HIGHBRIDGE_DEVHOST_DLL' }, async () => {
   const client = new HighbridgeClient({ port: PORT, fetch: withOrigin(ORIGIN), origin: ORIGIN, storage: null });
   await client.connect({ launch: false });
-  await assert.rejects(client._json('POST', '/v1/scans', { format: 'pdf' }), (err) => err.code === 'invalid_options');
+  await assert.rejects(client._json('POST', '/v1/scans', { format: 'tiff' }), (err) => err.code === 'invalid_options');
 });
+
+function pdfPageCount(bytes) {
+  const text = new TextDecoder('latin1').decode(bytes);
+  return text.match(/\/Type\s*\/Page(?!s)/g)?.length ?? 0;
+}
 
 test('e2e: another origin cannot collect the result', { skip: !DLL && 'set HIGHBRIDGE_DEVHOST_DLL' }, async () => {
   const owner = new HighbridgeClient({ port: PORT, fetch: withOrigin(ORIGIN), origin: ORIGIN, storage: null });

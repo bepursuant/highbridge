@@ -21,20 +21,26 @@ public enum PaperSource
 }
 
 /// <summary>
-/// What the client downloads. Only <see cref="Png"/> (one image per page) exists today. A
-/// document format such as PDF would be a new value here plus a case in <see cref="OutputFormats"/>.
+/// What the client downloads. <see cref="Png"/> is one image per page and the default.
+/// <see cref="Pdf"/> is one document for the scan job: every page of that job, in order.
 /// </summary>
 [JsonConverter(typeof(CamelCaseEnumConverter<OutputFormat>))]
 public enum OutputFormat
 {
     Png,
+    Pdf,
 }
 
 public static class OutputFormats
 {
+    public const string PngMediaType = "image/png";
+
+    public const string PdfMediaType = "application/pdf";
+
     public static string MediaType(OutputFormat format) => format switch
     {
-        OutputFormat.Png => "image/png",
+        OutputFormat.Png => PngMediaType,
+        OutputFormat.Pdf => PdfMediaType,
         _ => throw new ArgumentOutOfRangeException(nameof(format), format, null),
     };
 
@@ -44,6 +50,9 @@ public static class OutputFormats
         {
             case "png":
                 format = OutputFormat.Png;
+                return true;
+            case "pdf":
+                format = OutputFormat.Pdf;
                 return true;
             default:
                 format = default;

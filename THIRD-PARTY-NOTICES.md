@@ -15,11 +15,15 @@ before adding a package to `Directory.Packages.props` or a tool to `.config/dotn
 | NTwain | 3.7.6 | MIT | https://github.com/soukoku/ntwain |
 | ZXing.Net | 0.16.11 | Apache-2.0 | https://github.com/micjahn/ZXing.Net |
 | Great.EmvTags | 2.1.0 | MIT | https://github.com/bepursuant/Great.EmvTags |
+| PDFsharp | 6.2.4 | MIT | https://github.com/empira/PDFsharp |
+| System.Security.Cryptography.Pkcs | 10.0.14 | MIT | https://github.com/dotnet/runtime |
 
 The provenance stamp (PNG decoding and encoding, the band font, SHA-256) adds no third-party
 component: it is highbridge's own code on top of the .NET runtime's zlib and cryptography.
 SixLabors ImageSharp and SixLabors Fonts must not be used (their license charges larger
-commercial users).
+commercial users). PDFsharp 6.5.0 and later are AGPL-3.0 and must not be used; 6.2.4 is the
+last MIT release. It does not pull ImageSharp. It asks for System.Security.Cryptography.Pkcs 8.0.1,
+which has known vulnerabilities, so highbridge references 10.0.14 of that package directly (MIT, part of .NET).
 
 `Highbridge.exe` is a framework-dependent build: the .NET runtimes are not inside the MSI. Users
 install Microsoft's own x86 .NET Desktop Runtime and ASP.NET Core Runtime (MIT), which the MSI
@@ -77,11 +81,42 @@ images carry no third-party terms. The sample page's header text uses the visito
 | Inno Setup | Produces EXE setups, not MSI, and commercial users are asked to buy a license |
 | Velopack | MIT, but built around its own `Setup.exe` and updater; the chosen format is a plain MSI |
 | ZXing.Net.Bindings.ImageSharp | Pulls SixLabors ImageSharp, whose license charges revenue-generating users. Not needed: highbridge decodes PNG itself |
+| PDFsharp 6.5.0 and later | AGPL-3.0. The NuGet license changed after 6.2.4. Stay on 6.2.4 |
 | ZXing.Net.Bindings.SkiaSharp and the other ZXing.Net bindings | A native library, or a binding we don't use. The core ZXing.Net package takes a luminance buffer directly |
 | ZBar / libzbar | LGPL |
 | Dynamsoft Barcode Reader, Aspose.BarCode, IronBarcode, Leadtools | Commercial |
 
 ---
+
+## PDFsharp license
+
+PDFsharp 6.2.4, from the tag `v6.2.4`. Later releases of the same package are AGPL-3.0.
+
+```
+Copyright (c) 2001-2026 empira Software GmbH, Troisdorf (Cologne Area), Germany
+
+http://docs.pdfsharp.net
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of this software and associated documentation files (the "Software"),
+to deal in the Software without restriction, including without limitation
+the rights to use, copy, modify, merge, publish, distribute, sublicense,
+and/or sell copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included
+in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+```
 
 ## NTwain license
 

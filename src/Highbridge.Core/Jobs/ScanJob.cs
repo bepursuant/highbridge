@@ -32,7 +32,7 @@ public sealed class ScanJob
 {
     private readonly object _gate = new();
     private readonly List<ScannedPage> _pages = [];
-    private int _heldPages;
+    private int _images;
     private readonly TaskCompletionSource _finished = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _claimed = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -102,8 +102,9 @@ public sealed class ScanJob
     public bool? UsedFeeder { get; internal set; }
 
     /// <summary>
-    /// Pages received from the scanner so far. Stamped jobs hold their pages until the scan ends
-    /// (the band says "page N of M"), so this can be ahead of <see cref="Pages"/>.
+    /// Images the scanner has delivered. A stamped job and a PDF job hold those images until the
+    /// scan ends, so this can be ahead of <see cref="Pages"/>. A PDF job still counts each side;
+    /// <see cref="Pages"/> is then the one document.
     /// </summary>
     public int PagesScanned
     {
@@ -111,7 +112,7 @@ public sealed class ScanJob
         {
             lock (_gate)
             {
-                return _pages.Count + _heldPages;
+                return _images;
             }
         }
     }
@@ -134,6 +135,7 @@ public sealed class ScanJob
         lock (_gate)
         {
             _pages.Add(page);
+            _images++;
         }
     }
 
@@ -141,7 +143,7 @@ public sealed class ScanJob
     {
         lock (_gate)
         {
-            _heldPages++;
+            _images++;
         }
     }
 
@@ -150,7 +152,16 @@ public sealed class ScanJob
         lock (_gate)
         {
             _pages.AddRange(pages);
-            _heldPages = 0;
+        }
+    }
+
+    /// <summary>Replaces any held page images with the one document for this job.</summary>
+    internal void PublishDocument(ScannedPage document)
+    {
+        lock (_gate)
+        {
+            _pages.Clear();
+            _pages.Add(document);
         }
     }
 

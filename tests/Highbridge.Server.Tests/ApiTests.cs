@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using PdfSharp.Pdf.IO;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
@@ -244,7 +245,7 @@ public sealed class ApiTests : IAsyncLifetime
     [InlineData("{\"barcodes\": true, \"barcodeFormats\": [\"upc\"]}")]
     [InlineData("{\"colorMode\": \"sepia\"}")]
     [InlineData("{\"colorMode\": 1}")]
-    [InlineData("{\"format\": \"pdf\"}")]
+    [InlineData("{\"format\": \"tiff\"}")]
     [InlineData("not json")]
     public async Task Invalid_scan_options_are_rejected(string body)
     {
@@ -350,6 +351,61 @@ public sealed class ApiTests : IAsyncLifetime
 
         Assert.True(job.Stamp!.RequiredByPolicy);
         Assert.All(job.Pages, p => Assert.Equal(Provenance.StampPosition.Bottom, p.Provenance!.Position));
+    }
+
+    [Fact]
+    public async Task Pdf_scan_returns_one_document_per_job_and_png_pages_still_download()
+    {
+        _runtime.Origins.Pair(Site);
+        var mock = (MockScannerBackend)_runtime.Backend;
+        mock.LoadSheets(2);
+        try
+        {
+            var first = await FinishedPdfSheet();
+            var second = await FinishedPdfSheet();
+
+            Assert.Equal(OutputFormat.Pdf, first.Format);
+            Assert.Equal(2, first.PagesScanned);
+            Assert.Equal("application/pdf", Assert.Single(first.Pages).MediaType);
+            byte[] firstPdf = await Download(first.Pages[0].Url);
+            byte[] secondPdf = await Download(second.Pages[0].Url);
+            Assert.Equal("%PDF"u8.ToArray(), firstPdf[..4]);
+            Assert.Equal(2, PdfPageCount(firstPdf));
+            Assert.Equal(2, PdfPageCount(secondPdf));
+            Assert.NotEqual(firstPdf, secondPdf);
+
+            var pngRequest = Request(HttpMethod.Post, "/v1/scans", Site);
+            pngRequest.Content = JsonContent.Create(new { source = "flatbed", scannerId = MockScannerBackend.FlatbedId });
+            var png = await PollUntilFinished((await Json<ScanJobResponse>(await _http.SendAsync(pngRequest))).Id, Site);
+            Assert.Equal(OutputFormat.Png, png.Format);
+            Assert.Equal("image/png", Assert.Single(png.Pages).MediaType);
+            byte[] pngBytes = await Download(png.Pages[0].Url);
+            Assert.True(PngEncoder.TryReadSize(pngBytes, out _, out _));
+        }
+        finally
+        {
+            mock.LoadSheets(2);
+        }
+    }
+
+    private async Task<ScanJobResponse> FinishedPdfSheet()
+    {
+        var create = Request(HttpMethod.Post, "/v1/scans", Site);
+        create.Content = JsonContent.Create(new { source = "feeder", duplex = true, oneSheet = true, format = "pdf" });
+        return await PollUntilFinished((await Json<ScanJobResponse>(await _http.SendAsync(create))).Id, Site);
+    }
+
+    private async Task<byte[]> Download(string url)
+    {
+        var response = await _http.SendAsync(Request(HttpMethod.Get, url, Site));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        return await response.Content.ReadAsByteArrayAsync();
+    }
+
+    private static int PdfPageCount(byte[] pdf)
+    {
+        using var document = PdfReader.Open(new MemoryStream(pdf), PdfDocumentOpenMode.Import);
+        return document.PageCount;
     }
 
     [Fact]

@@ -113,6 +113,8 @@ button:disabled { cursor: progress; opacity: 0.7; }
 .empty-art.card { width: 96px; height: 60px; border-radius: 8px; padding: 0; background: linear-gradient(145deg, #dbeafe, #eff6ff); }
 .empty[hidden] { display: none; }
 .pages { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 16px; }
+.page.pdf { grid-column: 1 / -1; }
+.pdf-view { display: block; width: 100%; height: 480px; border: 0; border-bottom: 1px solid var(--line); background: #fff; }
 .page { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #f8fafc; display: flex; flex-direction: column; }
 .thumb { display: block; aspect-ratio: 210 / 297; background: #fff; border-bottom: 1px solid var(--line); }
 .thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }

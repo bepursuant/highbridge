@@ -121,7 +121,8 @@ export class HighbridgeClient {
    * Scans and returns the pages as Blobs.
    * @param {object} [options] scannerId, dpi, colorMode ('color'|'gray'|'blackWhite'), source ('auto'|'flatbed'|'feeder'), duplex,
    *   oneSheet (one feeder sheet per job: front and back when duplex; an empty feeder waits),
-   *   showDriverUi, maxPages, format ('png'),
+   *   showDriverUi, maxPages, format ('png' | 'pdf'; png is the default, one image per page.
+   *   pdf is one file for this scan: a duplex sheet is the front and the back. The next scan is a new file),
    *   stamp ({ position: 'top'|'bottom' } adds highbridge's provenance band; each page then has `provenance`),
    *   barcodes (true to find barcodes: each page then has `barcodeStatus` and `barcodes`, and the result a flat `barcodes`),
    *   barcodeFormats (e.g. ['qrCode', 'code128']; default: all common formats)
@@ -166,7 +167,7 @@ export class HighbridgeClient {
       job.pages.map(async (page) => ({ ...page, blob: await this._blob(page.url) })),
     );
     this._json('DELETE', `/v1/scans/${job.id}`).catch(() => {});
-    const result = { id: job.id, pages };
+    const result = { id: job.id, format: job.format, pagesScanned: job.pagesScanned, pages };
     if (job.stamp) result.stamp = job.stamp;
     if (job.barcodes) result.barcodes = job.barcodes;
     if (typeof job.usedFeeder === 'boolean') result.usedFeeder = job.usedFeeder;

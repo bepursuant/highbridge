@@ -211,13 +211,15 @@ public sealed class MockScannerBackend : IScannerBackend
     {
         bool grayscale = options.ColorMode != ColorMode.Color;
         bool threshold = options.ColorMode == ColorMode.BlackWhite;
-        byte[] data = options.Format switch
+        // PDF is one document for the whole job, built after every page is in. Each page here is
+        // still the PNG those pages are made from (stamps and barcodes read PNG).
+        byte[] png = options.Format switch
         {
-            OutputFormat.Png => canvas.ToPng(grayscale, threshold, dpi),
+            OutputFormat.Png or OutputFormat.Pdf => canvas.ToPng(grayscale, threshold, dpi),
             _ => throw new ScannerException("unsupported_format", $"The mock scanner cannot produce {options.Format}."),
         };
         string scannerId = options.ScannerId ?? FeederId;
-        return new ScannedPage(index, OutputFormats.MediaType(options.Format), canvas.Width, canvas.Height, data)
+        return new ScannedPage(index, OutputFormats.PngMediaType, canvas.Width, canvas.Height, png)
         {
             ScannerName = Scanners.First(s => s.Id == scannerId).Name,
         };
