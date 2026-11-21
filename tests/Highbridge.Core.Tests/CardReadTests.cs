@@ -131,7 +131,7 @@ public class CardReadTests
     }
 
     [Fact]
-    public void Disabled_policy_blocks_card_reads_and_leaves_scans_alone()
+    public async Task Disabled_policy_blocks_card_reads_and_leaves_scans_alone()
     {
         var policy = new HighbridgePolicy { CardReader = new CardReaderPolicy { Mode = CardReaderMode.Disabled } };
         using var runtime = TestRuntime.Create(policy: policy);
@@ -140,7 +140,8 @@ public class CardReadTests
         var rejected = Assert.Throws<JobRejectedException>(() => runtime.CardReads.Start(Origin, new CardReadOptions(), CardReadTrigger.Api));
         Assert.Equal("card_reader_disabled", rejected.Code);
         var scan = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Flatbed, MaxSheets = 1 }, ScanTrigger.Api);
-        Assert.Equal(ScanJobStatus.Queued, scan.Status);
+        await scan.Finished.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(ScanJobStatus.Completed, scan.Status);
     }
 
     [Fact]
