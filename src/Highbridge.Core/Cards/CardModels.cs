@@ -20,21 +20,21 @@ public sealed record CardReadOptions
     public const int DefaultWaitForCardMs = 30_000;
     public const int MaxWaitForCardMs = 120_000;
 
-    /// <summary>Reader id from <c>/v1/card-readers</c>; null means the default reader.</summary>
-    public string? ReaderId { get; init; }
+    /// <summary>Reader id from <c>GET /pcsc</c>; null means the default reader.</summary>
+    public string? ReaderId { get; set; }
 
-    public CardInterface Interface { get; init; } = CardInterface.Auto;
+    public CardInterface Interface { get; set; } = CardInterface.Auto;
 
     /// <summary>Optional hex AID, 5–16 bytes. Otherwise the highest-priority directory entry that selects.</summary>
-    public string? Aid { get; init; }
+    public string? Aid { get; set; }
 
-    public int WaitForCardMs { get; init; } = DefaultWaitForCardMs;
+    public int WaitForCardMs { get; set; } = DefaultWaitForCardMs;
 
     /// <summary>
     /// Before looking for a card, wait until the slot is empty. A session sets this after a
     /// successful read so the same card is not read again. One-shot reads leave it off.
     /// </summary>
-    public bool WaitForRemoval { get; init; }
+    public bool WaitForRemoval { get; set; }
 
     /// <summary>Uppercase hex AID with spaces removed, or null when <see cref="Aid"/> is absent.</summary>
     public string? NormalizedAid =>

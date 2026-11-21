@@ -58,42 +58,51 @@ public sealed record ScanOptions
     public const int MaxDpi = 1200;
     public const int MaxPageLimit = 500;
 
-    /// <summary>Scanner id from <c>/v1/scanners</c>; null means the default scanner.</summary>
-    public string? ScannerId { get; init; }
+    /// <summary>Scanner id from <c>GET /scanner</c>; null means the default scanner.</summary>
+    public string? ScannerId { get; set; }
 
-    public int Dpi { get; init; } = 200;
+    public int Dpi { get; set; } = 200;
 
-    public ColorMode ColorMode { get; init; } = ColorMode.Color;
+    public ColorMode ColorMode { get; set; } = ColorMode.Color;
 
-    public PaperSource Source { get; init; } = PaperSource.Auto;
+    public PaperSource Source { get; set; } = PaperSource.Auto;
 
-    public bool Duplex { get; init; }
-
-    /// <summary>
-    /// One feeder sheet per job. With <see cref="Duplex"/>, that is the front and the back and
-    /// nothing after them; further sheets stay in the feeder for the next job. An empty feeder
-    /// waits instead of failing. Off, the job takes the whole feeder, as before. A flatbed is
-    /// always one shot.
-    /// </summary>
-    public bool OneSheet { get; init; }
+    public bool Duplex { get; set; }
 
     /// <summary>Show the vendor's TWAIN driver dialog instead of scanning with these settings.</summary>
-    public bool ShowDriverUi { get; init; }
+    public bool ShowDriverUi { get; set; }
 
-    /// <summary>0 means no limit.</summary>
-    public int MaxPages { get; init; }
+    /// <summary>
+    /// 0 means one document holds every page. A positive value closes the current document and
+    /// opens another once that many pages are in it. The front and back of one sheet are two pages.
+    /// </summary>
+    public int MaxPagesPerDocument { get; set; }
 
-    public OutputFormat Format { get; init; } = OutputFormat.Png;
+    /// <summary>
+    /// 0 means no limit. A positive value stops the feeder after that many sheets. An image-counted
+    /// driver is asked for this many sheets times the number of sides. A sheet-counted driver
+    /// (PaperStream / fi series) is asked for this many sheets, and duplex still returns both sides.
+    /// A flatbed is one shot either way.
+    /// </summary>
+    public int MaxSheets { get; set; }
+
+    /// <summary>
+    /// Clockwise turn applied to each page before stacking, stamping, or barcode search.
+    /// 0, 90, 180, or 270.
+    /// </summary>
+    public int Orientation { get; set; }
+
+    public OutputFormat Format { get; set; } = OutputFormat.Png;
 
     /// <summary>Add a provenance band to each page; null means no stamp (unless policy requires one).</summary>
-    public StampOptions? Stamp { get; init; }
+    public StampOptions? Stamp { get; set; }
 
-    /// <summary>Find barcodes on every page; see <see cref="Highbridge.Barcodes.BarcodeDetector"/>.</summary>
-    public bool Barcodes { get; init; }
+    /// <summary>Find barcodes on each finished document; see <see cref="Highbridge.Barcodes.BarcodeDetector"/>.</summary>
+    public bool Barcodes { get; set; }
 
     /// <summary>Barcode formats to look for; null means <see cref="BarcodeFormatSet.Default"/>. Needs <see cref="Barcodes"/>.</summary>
     [JsonConverter(typeof(BarcodeFormatListConverter))]
-    public BarcodeFormat? BarcodeFormats { get; init; }
+    public BarcodeFormat? BarcodeFormats { get; set; }
 
     /// <summary>Returns a list of validation problems; empty when the options are usable.</summary>
     public IReadOnlyList<string> Validate()
@@ -104,9 +113,19 @@ public sealed record ScanOptions
             errors.Add($"dpi must be between {MinDpi} and {MaxDpi}.");
         }
 
-        if (MaxPages is < 0 or > MaxPageLimit)
+        if (MaxPagesPerDocument is < 0 or > MaxPageLimit)
         {
-            errors.Add($"maxPages must be between 0 and {MaxPageLimit}.");
+            errors.Add($"maxPagesPerDocument must be between 0 and {MaxPageLimit}.");
+        }
+
+        if (MaxSheets is < 0 or > MaxPageLimit)
+        {
+            errors.Add($"maxSheets must be between 0 and {MaxPageLimit}.");
+        }
+
+        if (Orientation is not (0 or 90 or 180 or 270))
+        {
+            errors.Add("orientation must be 0, 90, 180, or 270.");
         }
 
         if (ScannerId is { Length: > 256 })
@@ -139,19 +158,23 @@ public sealed record ScanOptions
     }
 
     /// <summary>
-    /// How many images this job may take. Null means no limit. <see cref="OneSheet"/> caps a
-    /// feeder scan at one sheet (two images when duplex, otherwise one). <see cref="MaxPages"/>,
-    /// when set, can only make that cap smaller.
+    /// How many images this scan may return. Null means the feeder runs until it is empty.
+    /// A flatbed is one image. A limited feeder is <see cref="MaxSheets"/> times the number of sides.
+    /// This is not the value to put in CAP_XFERCOUNT for a sheet-counted driver; see <see cref="FeederXferCount"/>.
     /// </summary>
-    public int? EffectivePageLimit()
+    public int? ImageLimit()
     {
-        int? sheet = OneSheet ? Duplex ? 2 : 1 : null;
-        if (MaxPages <= 0)
+        if (Source == PaperSource.Flatbed)
         {
-            return sheet;
+            return 1;
         }
 
-        return sheet is int cap ? Math.Min(MaxPages, cap) : MaxPages;
+        if (MaxSheets <= 0)
+        {
+            return null;
+        }
+
+        return MaxSheets * (Duplex ? 2 : 1);
     }
 }
 
@@ -189,6 +212,40 @@ public sealed class ScannedPage
         new(Index, MediaType, width, height, data) { ScannerName = ScannerName, Provenance = provenance };
 }
 
+/// <summary>One PNG made by stacking a scan's pages top to bottom. The job returns these, not loose pages.</summary>
+public sealed class ScannedDocument
+{
+    public ScannedDocument(int index, string mediaType, int width, int height, byte[] data, int pageCount)
+    {
+        Index = index;
+        MediaType = mediaType;
+        Width = width;
+        Height = height;
+        Data = data;
+        PageCount = pageCount;
+    }
+
+    public int Index { get; }
+
+    public string MediaType { get; }
+
+    public int Width { get; }
+
+    public int Height { get; }
+
+    public byte[] Data { get; }
+
+    /// <summary>How many pages were stacked into this file.</summary>
+    public int PageCount { get; }
+
+    public string? ScannerName { get; init; }
+
+    public PageProvenance? Provenance { get; private init; }
+
+    public ScannedDocument Stamped(byte[] data, int width, int height, PageProvenance provenance) =>
+        new(Index, MediaType, width, height, data, PageCount) { ScannerName = ScannerName, Provenance = provenance };
+}
+
 /// <summary>A scanner-side failure with a message that is safe to show to the web page.</summary>
 public sealed class ScannerException : Exception
 {
@@ -215,9 +272,9 @@ public interface IScannerBackend
     Task<IReadOnlyList<ScannedPage>> ScanAsync(ScanOptions options, Action<ScannedPage>? onPage, CancellationToken cancellationToken);
 
     /// <summary>
-    /// When <paramref name="options"/> asks for one sheet from the feeder, blocks until
-    /// CAP_FEEDERLOADED reports paper or the token is canceled. Returns false when this scan
-    /// does not use the feeder, and does not wait. An empty feeder does not throw.
+    /// When this scan uses the feeder, blocks until paper is loaded or the token is canceled.
+    /// Returns false when the scan does not use the feeder (a flatbed, or a source with no feeder).
+    /// An empty feeder does not throw.
     /// </summary>
     Task<bool> WaitForFeederAsync(ScanOptions options, CancellationToken cancellationToken) =>
         Task.FromResult(options.Source != PaperSource.Flatbed);

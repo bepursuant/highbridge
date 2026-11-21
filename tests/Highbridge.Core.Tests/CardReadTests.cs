@@ -119,7 +119,7 @@ public class CardReadTests
 
         var read = runtime.CardReads.Start(Origin, new CardReadOptions(), CardReadTrigger.Api);
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var scan = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Flatbed, MaxPages = 1 }, ScanTrigger.Api);
+        var scan = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Flatbed, MaxSheets = 1 }, ScanTrigger.Api);
         await scan.Finished.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.Equal(ScanJobStatus.Completed, scan.Status);
@@ -139,7 +139,7 @@ public class CardReadTests
 
         var rejected = Assert.Throws<JobRejectedException>(() => runtime.CardReads.Start(Origin, new CardReadOptions(), CardReadTrigger.Api));
         Assert.Equal("card_reader_disabled", rejected.Code);
-        var scan = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Flatbed, MaxPages = 1 }, ScanTrigger.Api);
+        var scan = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Flatbed, MaxSheets = 1 }, ScanTrigger.Api);
         Assert.Equal(ScanJobStatus.Queued, scan.Status);
     }
 

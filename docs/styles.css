@@ -16,6 +16,7 @@
 }
 
 * { box-sizing: border-box; }
+hb-scan, hb-read { display: block; }
 body { margin: 0; min-height: 100vh; display: flex; flex-direction: column; }
 code { font-family: "Cascadia Code", ui-monospace, monospace; font-size: 0.85em; background: #eef2ff; padding: 1px 5px; border-radius: 5px; }
 

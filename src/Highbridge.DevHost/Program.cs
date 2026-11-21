@@ -108,7 +108,7 @@ using var runtime = new HighbridgeRuntime(
     loggerFactory: loggerFactory,
     port: port);
 
-runtime.Jobs.JobFinished += job => logger.LogInformation("Scan {Id} for {Origin}: {Status} ({Pages} pages)", job.Id, job.Origin, job.Status, job.Pages.Count);
+runtime.Jobs.JobFinished += job => logger.LogInformation("Scan {Id} for {Origin}: {Status} ({Documents} documents)", job.Id, job.Origin, job.Status, job.Documents.Count);
 runtime.CardReads.JobFinished += job => logger.LogInformation("Card read {Id} for {Origin}: {Status} {Code}", job.Id, job.Origin, job.Status, job.ErrorCode);
 
 var app = HighbridgeServer.Build(runtime, b =>

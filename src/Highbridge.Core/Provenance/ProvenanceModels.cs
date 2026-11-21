@@ -14,9 +14,10 @@ public enum StampPosition
 /// the band comes from highbridge, so unknown members (such as text) are rejected.
 /// </summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+[System.ComponentModel.TypeConverter(typeof(System.ComponentModel.ExpandableObjectConverter))]
 public sealed record StampOptions
 {
-    public StampPosition Position { get; init; } = StampPosition.Bottom;
+    public StampPosition Position { get; set; } = StampPosition.Bottom;
 }
 
 [JsonConverter(typeof(CamelCaseEnumConverter<StampMode>))]

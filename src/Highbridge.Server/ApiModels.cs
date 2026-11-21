@@ -25,15 +25,17 @@ public sealed record CardReadersResponse(IReadOnlyList<CardReaderInfo> Readers);
 
 public sealed record ErrorResponse(string Error, string Message);
 
-/// <param name="Provenance">Only on stamped pages.</param>
+/// <param name="Provenance">Only on a stamped document.</param>
 /// <param name="BarcodeStatus">Only when the scan asked for barcodes, like <paramref name="Barcodes"/>.</param>
-public sealed record PageResponse(
+/// <param name="PageCount">How many pages were stacked into this file.</param>
+public sealed record DocumentResponse(
     int Index,
     string MediaType,
     int Width,
     int Height,
     int Size,
     string Url,
+    int PageCount,
     PageProvenance? Provenance = null,
     BarcodeStatus? BarcodeStatus = null,
     IReadOnlyList<BarcodeResult>? Barcodes = null);
@@ -41,7 +43,7 @@ public sealed record PageResponse(
 /// <summary>The stamp a job actually gets, after policy.</summary>
 public sealed record StampResponse(StampPosition Position, bool RequiredByPolicy, string ScanId);
 
-/// <param name="Barcodes">Every page's barcodes in one list; only when the scan asked for barcodes.</param>
+/// <param name="Barcodes">Every document's barcodes in one list; only when the scan asked for barcodes.</param>
 public sealed record ScanJobResponse(
     string Id,
     ScanJobStatus Status,
@@ -50,15 +52,15 @@ public sealed record ScanJobResponse(
     DateTimeOffset CreatedAt,
     DateTimeOffset? FinishedAt,
     ErrorResponse? Error,
-    IReadOnlyList<PageResponse> Pages,
+    IReadOnlyList<DocumentResponse> Documents,
     IReadOnlyList<BarcodeResult>? Barcodes = null)
 {
     public StampResponse? Stamp { get; init; }
 
-    /// <summary>Pages received so far; ahead of <see cref="Pages"/> while a stamped scan runs.</summary>
+    /// <summary>Pages received from the scanner so far. Documents appear once they are stacked.</summary>
     public int PagesScanned { get; init; }
 
-    /// <summary>One-sheet jobs only. False when the scanner did not use the feeder.</summary>
+    /// <summary>False when the scanner did not use the feeder.</summary>
     public bool? UsedFeeder { get; init; }
 
     public static ScanJobResponse From(ScanJob job) => new(
@@ -69,7 +71,7 @@ public sealed record ScanJobResponse(
         job.CreatedAt,
         job.FinishedAt,
         job.ErrorCode is null ? null : new ErrorResponse(job.ErrorCode, job.ErrorMessage ?? job.ErrorCode),
-        job.Pages.Select(p => WithBarcodes(new PageResponse(p.Index, p.MediaType, p.Width, p.Height, p.Data.Length, $"/v1/scans/{job.Id}/pages/{p.Index}", p.Provenance), job.Barcodes)).ToArray(),
+        job.Documents.Select(document => WithBarcodes(new DocumentResponse(document.Index, document.MediaType, document.Width, document.Height, document.Data.Length, $"/scanner/{job.Id}/documents/{document.Index}", document.PageCount, document.Provenance), job.Barcodes)).ToArray(),
         job.Barcodes?.All)
     {
         Stamp = job.Stamp is { } stamp ? new StampResponse(stamp.Position, job.StampRequiredByPolicy, job.ScanId!) : null,
@@ -77,8 +79,8 @@ public sealed record ScanJobResponse(
         UsedFeeder = job.UsedFeeder,
     };
 
-    private static PageResponse WithBarcodes(PageResponse page, JobBarcodes? barcodes) =>
-        barcodes?.ForPage(page.Index) is { } found ? page with { BarcodeStatus = found.Status, Barcodes = found.Barcodes } : page;
+    private static DocumentResponse WithBarcodes(DocumentResponse document, JobBarcodes? barcodes) =>
+        barcodes?.ForPage(document.Index) is { } found ? document with { BarcodeStatus = found.Status, Barcodes = found.Barcodes } : document;
 }
 
 public sealed record CardReadJobResponse(

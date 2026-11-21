@@ -259,20 +259,19 @@ public class ProvenanceJobTests
 
         Assert.Equal(ScanJobStatus.Completed, job.Status);
         Assert.Matches("^HB-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$", job.ScanId);
-        Assert.Equal(2, job.Pages.Count);
-        for (int i = 0; i < 2; i++)
-        {
-            var p = job.Pages[i].Provenance!;
-            Assert.Equal((i + 1, 2), (p.Page, p.PageCount));
-            Assert.Equal(job.ScanId, p.ScanId);
-            Assert.Equal(("WS-01", "CONTOSO\\jsmith", Origin), (p.Workstation, p.User, p.Origin));
-            Assert.Equal("highbridge mock feeder (duplex)", p.Scanner);
-            Assert.Equal(new DateTimeOffset(2026, 10, 29, 16, 36, 5, TimeSpan.FromHours(-4)), p.ScannedAt);
-            Assert.Equal(TimeSpan.FromHours(-4), p.ScannedAt.Offset);
-            Assert.Equal(TimeSpan.Zero, p.ScannedAtUtc.Offset);
-            Assert.True(ProvenanceVerifier.Verify(job.Pages[i].Data).Valid);
-            Assert.Equal(1169 + p.BandHeight, job.Pages[i].Height);
-        }
+        Assert.Equal(2, job.PagesScanned);
+        var document = Assert.Single(job.Documents);
+        Assert.Equal(2, document.PageCount);
+        var p = document.Provenance!;
+        Assert.Equal((1, 1), (p.Page, p.PageCount));
+        Assert.Equal(job.ScanId, p.ScanId);
+        Assert.Equal(("WS-01", "CONTOSO\\jsmith", Origin), (p.Workstation, p.User, p.Origin));
+        Assert.Equal("highbridge mock feeder (duplex)", p.Scanner);
+        Assert.Equal(new DateTimeOffset(2026, 10, 29, 16, 36, 5, TimeSpan.FromHours(-4)), p.ScannedAt);
+        Assert.Equal(TimeSpan.FromHours(-4), p.ScannedAt.Offset);
+        Assert.Equal(TimeSpan.Zero, p.ScannedAtUtc.Offset);
+        Assert.True(ProvenanceVerifier.Verify(document.Data).Valid);
+        Assert.Equal((1169 * 2) + p.BandHeight, document.Height);
     }
 
     [Fact]
@@ -286,8 +285,8 @@ public class ProvenanceJobTests
 
         Assert.Null(job.Stamp);
         Assert.Null(job.ScanId);
-        Assert.All(job.Pages, p => Assert.Null(p.Provenance));
-        Assert.All(job.Pages, p => Assert.Empty(PngEncoder.ReadText(p.Data)));
+        Assert.All(job.Documents, p => Assert.Null(p.Provenance));
+        Assert.All(job.Documents, p => Assert.Empty(PngEncoder.ReadText(p.Data)));
     }
 
     [Fact]
@@ -303,7 +302,7 @@ public class ProvenanceJobTests
         await unrequested.Finished.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.True(job.StampRequiredByPolicy);
-        Assert.All(job.Pages.Concat(unrequested.Pages), p => Assert.Equal(StampPosition.Top, p.Provenance!.Position));
+        Assert.All(job.Documents.Concat(unrequested.Documents), p => Assert.Equal(StampPosition.Top, p.Provenance!.Position));
     }
 
     [Fact]
@@ -346,13 +345,14 @@ public class ProvenanceJobTests
         await backend.FirstPageDelivered.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.Equal(1, job.PagesScanned);
-        Assert.Empty(job.Pages);
+        Assert.Empty(job.Documents);
 
         backend.Release.SetResult();
         await job.Finished.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal(2, job.PagesScanned);
-        Assert.Equal([1, 2], job.Pages.Select(p => p.Provenance!.Page));
-        Assert.All(job.Pages, p => Assert.Equal("gated scanner", p.Provenance!.Scanner));
+        Assert.Equal(1, Assert.Single(job.Documents).Provenance!.Page);
+        Assert.Equal(160 + job.Documents[0].Provenance!.BandHeight, job.Documents[0].Height);
+        Assert.All(job.Documents, p => Assert.Equal("gated scanner", p.Provenance!.Scanner));
     }
 
     [Fact]
@@ -366,7 +366,7 @@ public class ProvenanceJobTests
 
         Assert.Equal(ScanJobStatus.Failed, job.Status);
         Assert.Equal("stamp_failed", job.ErrorCode);
-        Assert.Empty(job.Pages);
+        Assert.Empty(job.Documents);
     }
 
     [Fact]

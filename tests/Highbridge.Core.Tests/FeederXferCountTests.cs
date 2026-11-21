@@ -26,8 +26,8 @@ public class FeederXferCountTests
     [Fact]
     public void Duplex_one_sheet_is_one_sheet_on_a_fi_series_feeder_and_two_images_on_the_Ambir()
     {
-        var duplex = new ScanOptions { Source = PaperSource.Feeder, Duplex = true, OneSheet = true };
-        var front = new ScanOptions { Source = PaperSource.Feeder, OneSheet = true };
+        var duplex = new ScanOptions { Source = PaperSource.Feeder, Duplex = true, MaxSheets = 1 };
+        var front = new ScanOptions { Source = PaperSource.Feeder, MaxSheets = 1 };
         var whole = new ScanOptions { Source = PaperSource.Feeder, Duplex = true };
 
         Assert.Equal(1, FeederXferCount.Value(duplex, countsSheets: true));
@@ -36,5 +36,15 @@ public class FeederXferCountTests
         Assert.Equal(1, FeederXferCount.Value(front, countsSheets: false));
         Assert.Null(FeederXferCount.Value(whole, countsSheets: true));
         Assert.Null(FeederXferCount.Value(whole, countsSheets: false));
+    }
+
+    [Fact]
+    public void Two_duplex_sheets_stay_two_on_a_sheet_counted_driver_and_become_four_images_on_the_Ambir()
+    {
+        var duplex = new ScanOptions { Source = PaperSource.Feeder, Duplex = true, MaxSheets = 2 };
+        Assert.Equal(2, FeederXferCount.Value(duplex, countsSheets: true));
+        Assert.Equal(4, FeederXferCount.Value(duplex, countsSheets: false));
+        Assert.Null(FeederXferCount.Value(new ScanOptions { Source = PaperSource.Feeder, Duplex = true }, countsSheets: true));
+        Assert.Null(FeederXferCount.Value(new ScanOptions { Source = PaperSource.Flatbed, MaxSheets = 2 }, countsSheets: false));
     }
 }

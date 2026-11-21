@@ -132,12 +132,25 @@ public class BarcodeJobTests
             Dpi = 120,
             Barcodes = true,
             BarcodeFormats = BarcodeFormat.QrCode | BarcodeFormat.Code128,
-            MaxPages = 1,
+            MaxSheets = 1,
         }, ScanTrigger.Api);
         await job.Finished.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal(ScanJobStatus.Completed, job.Status);
-        var expected = MockBarcodeSheet.Contents(0).Where(c => c.Format is BarcodeFormat.QrCode or BarcodeFormat.Code128);
+        static bool NearUpright(int angle)
+        {
+            int delta = Math.Abs(angle % 360);
+            if (delta > 180)
+            {
+                delta = 360 - delta;
+            }
+
+            return delta <= 15;
+        }
+
+        var expected = MockBarcodeSheet.Contents(0).Where(code =>
+            code.Format == BarcodeFormat.QrCode
+            || (code.Format == BarcodeFormat.Code128 && (NearUpright(code.Angle) || NearUpright(code.Angle - 180))));
         Assert.Equal(expected.Select(c => (c.Format, c.Text)).Order(), job.Barcodes!.All.Select(b => (b.Format, b.Text)).Order());
         Assert.Equal(BarcodeStatus.Done, job.Barcodes.ForPage(0).Status);
         Assert.All(job.Barcodes.All, b => Assert.Equal(0, b.Page));

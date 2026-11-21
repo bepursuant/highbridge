@@ -47,11 +47,12 @@ internal sealed class CapabilityNegotiator(DataSource source, TwainSession sessi
 
         if (FeederXferCount.Value(options, countsSheets) is int xferCount)
         {
-            if (options.OneSheet && countsSheets && options.EffectivePageLimit() is int images && xferCount != images)
+            if (countsSheets && options.ImageLimit() is int images && xferCount != images)
             {
                 logger.LogInformation(
-                    "CAP_XFERCOUNT counts sheets on '{Source}', so this duplex one-sheet scan asks for 1 sheet rather than {Images} images. The image count would feed another sheet, and resetting that transfer crashes this driver",
+                    "CAP_XFERCOUNT counts sheets on '{Source}', so this scan asks for {Sheets} sheet(s) rather than {Images} images. The image count would feed another sheet, and resetting that transfer crashes this driver",
                     source.Name,
+                    xferCount,
                     images);
             }
 
@@ -75,7 +76,7 @@ internal sealed class CapabilityNegotiator(DataSource source, TwainSession sessi
             Describe(caps.CapFeederEnabled),
             Describe(caps.CapDuplexEnabled),
             zeroIsBlack ? "chocolate (0 = black)" : "vanilla (0 = white)");
-        return new NegotiatedScan(mechanism, zeroIsBlack, options.OneSheet && countsSheets);
+        return new NegotiatedScan(mechanism, zeroIsBlack, countsSheets && options.MaxSheets > 0);
     }
 
     private void LogSupportedCaps(ICapabilities caps)
@@ -174,8 +175,9 @@ internal sealed class CapabilityNegotiator(DataSource source, TwainSession sessi
                     {
                         // A sheet-counted feeder (fi-8170) pre-picks the next sheet when autofeed
                         // is on. One sheet keeps it off so the second sheet never enters the path.
-                        // Image-counted feeders (Ambir) keep autofeed on; CAP_XFERCOUNT stops them.
-                        bool holdFeeder = options.OneSheet && countsSheets;
+                        // More sheets, and image-counted feeders (Ambir), keep autofeed on;
+                        // CAP_XFERCOUNT stops them.
+                        bool holdFeeder = countsSheets && options.MaxSheets == 1;
                         TrySet(caps.CapAutoFeed, CapabilityId.CapAutoFeed, holdFeeder ? BoolType.False : BoolType.True, Bool(!holdFeeder));
                     }
 
@@ -212,13 +214,13 @@ internal sealed class CapabilityNegotiator(DataSource source, TwainSession sessi
             case PaperSource.Flatbed:
                 return null;
             case PaperSource.Feeder when !hasFeeder:
-                logger.LogWarning("One sheet was requested, but the source has no CAP_FEEDERENABLED; this scan will not wait for paper");
+                logger.LogWarning("The feeder was requested, but the source has no CAP_FEEDERENABLED; this scan will not wait for paper");
                 return null;
             case PaperSource.Feeder:
                 bool enabled = TrySet(feeder, CapabilityId.CapFeederEnabled, BoolType.True, Bool(true));
                 if (!enabled && Current(feeder) != BoolType.True)
                 {
-                    logger.LogWarning("Could not enable the feeder for a one-sheet scan; this scan will not wait for paper");
+                    logger.LogWarning("Could not enable the feeder; this scan will not wait for paper");
                     return null;
                 }
 

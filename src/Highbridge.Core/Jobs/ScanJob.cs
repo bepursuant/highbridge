@@ -18,7 +18,7 @@ public enum ScanJobStatus
 [JsonConverter(typeof(CamelCaseEnumConverter<ScanTrigger>))]
 public enum ScanTrigger
 {
-    /// <summary>POST /v1/scans with a verified Origin header.</summary>
+    /// <summary>POST /scanner with a verified Origin header.</summary>
     Api,
 
     /// <summary>
@@ -31,8 +31,8 @@ public enum ScanTrigger
 public sealed class ScanJob
 {
     private readonly object _gate = new();
-    private readonly List<ScannedPage> _pages = [];
-    private int _heldPages;
+    private readonly List<ScannedDocument> _documents = [];
+    private int _pagesScanned;
     private readonly TaskCompletionSource _finished = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _claimed = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -54,7 +54,7 @@ public sealed class ScanJob
         }
     }
 
-    /// <summary>Barcodes found on the pages; null when the scan did not ask for them.</summary>
+    /// <summary>Barcodes found on the documents; null when the scan did not ask for them.</summary>
     public JobBarcodes? Barcodes { get; }
 
     public string Id { get; }
@@ -95,62 +95,48 @@ public sealed class ScanJob
     /// <summary>Short id printed on stamped pages; made by highbridge, unlike <see cref="Id"/>.</summary>
     public string? ScanId { get; internal init; }
 
-    /// <summary>
-    /// Set for a one-sheet job. False when the scan did not use the feeder, so a session must not
-    /// loop it. Null on an ordinary job.
-    /// </summary>
+    /// <summary>False when the scan did not use the feeder, so a session must not loop it.</summary>
     public bool? UsedFeeder { get; internal set; }
 
-    /// <summary>
-    /// Pages received from the scanner so far. Stamped jobs hold their pages until the scan ends
-    /// (the band says "page N of M"), so this can be ahead of <see cref="Pages"/>.
-    /// </summary>
+    /// <summary>Pages received from the scanner so far. Documents are published after they are stacked.</summary>
     public int PagesScanned
     {
         get
         {
             lock (_gate)
             {
-                return _pages.Count + _heldPages;
+                return _pagesScanned;
             }
         }
     }
 
-    public IReadOnlyList<ScannedPage> Pages
+    public IReadOnlyList<ScannedDocument> Documents
     {
         get
         {
             lock (_gate)
             {
-                return _pages.ToArray();
+                return _documents.ToArray();
             }
         }
     }
 
     internal void Claim() => _claimed.TrySetResult();
 
-    internal void AddPage(ScannedPage page)
+    internal void NotePage()
     {
         lock (_gate)
         {
-            _pages.Add(page);
+            _pagesScanned++;
         }
     }
 
-    internal void HoldPage()
+    internal void SetDocuments(IEnumerable<ScannedDocument> documents)
     {
         lock (_gate)
         {
-            _heldPages++;
-        }
-    }
-
-    internal void ReleaseHeldPages(IEnumerable<ScannedPage> pages)
-    {
-        lock (_gate)
-        {
-            _pages.AddRange(pages);
-            _heldPages = 0;
+            _documents.Clear();
+            _documents.AddRange(documents);
         }
     }
 

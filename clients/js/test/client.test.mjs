@@ -25,30 +25,30 @@ class FakeApp {
     if (!this.running) throw new TypeError('Failed to fetch');
 
     const json = (status, body) => new Response(body === null ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
-    if (method === 'GET' && pathname === '/v1/status') return json(200, { app: 'highbridge', version: '0.1.0', apiVersion: 1, backend: 'mock', paired: this.paired, pairingAllowed: true });
-    if (method === 'POST' && pathname === '/v1/pair') { this.paired = true; this.reapprove = false; return json(200, { paired: true }); }
+    if (method === 'GET' && pathname === '/status') return json(200, { app: 'highbridge', version: '0.1.0', apiVersion: 1, backend: 'mock', paired: this.paired, pairingAllowed: true });
+    if (method === 'POST' && pathname === '/pair') { this.paired = true; this.reapprove = false; return json(200, { paired: true }); }
     if (!this.paired) return json(403, { error: 'origin_not_paired', message: 'Pair first.' });
-    if (method === 'GET' && pathname === '/v1/scanners') return json(200, { scanners: [{ id: 'mock-feeder', name: 'Mock', backend: 'mock', isDefault: true }] });
-    if (method === 'POST' && pathname === '/v1/scans' && this.reapprove && JSON.parse(init.body ?? '{}').stamp) {
+    if (method === 'GET' && pathname === '/scanner') return json(200, { scanners: [{ id: 'mock-feeder', name: 'Mock', backend: 'mock', isDefault: true }] });
+    if (method === 'POST' && pathname === '/scanner' && this.reapprove && JSON.parse(init.body ?? '{}').stamp) {
       return json(403, { error: 'approval_required', message: 'Approve this site again.' });
     }
-    if (method === 'POST' && pathname === '/v1/scans') {
+    if (method === 'POST' && pathname === '/scanner') {
       const body = JSON.parse(init.body ?? '{}');
       const n = this.jobs.size + 1;
       const id = n === 1 ? 'job123456789abcdef' : `job${n}23456789abcdef`;
       return json(202, this.addJob(id, body));
     }
-    if (method === 'POST' && pathname === '/v1/card-reads' && this.reapprove) {
+    if (method === 'POST' && pathname === '/pcsc' && this.reapprove) {
       return json(403, { error: 'approval_required', message: 'Approve this site again.' });
     }
-    if (method === 'POST' && pathname === '/v1/card-reads') {
+    if (method === 'POST' && pathname === '/pcsc') {
       const body = JSON.parse(init.body ?? '{}');
       const n = this.cardJobs.size + 1;
       const id = body.requestId ?? (n === 1 ? 'card123456789abcdef' : `card${n}23456789abcdef`);
       return json(202, this.addCard(id, body));
     }
 
-    const cardMatch = pathname.match(/^\/v1\/card-reads\/([^/]+)$/);
+    const cardMatch = pathname.match(/^\/pcsc\/([^/]+)$/);
     if (cardMatch) {
       const card = this.cardJobs.get(cardMatch[1]);
       if (!card) return json(404, { error: 'not_found', message: 'No such card read.' });
@@ -58,7 +58,7 @@ class FakeApp {
       return json(200, this.cardView(card));
     }
 
-    const match = pathname.match(/^\/v1\/scans\/([^/]+)(?:\/pages\/(\d+))?$/);
+    const match = pathname.match(/^\/scanner\/([^/]+)(?:\/documents\/(\d+))?$/);
     const job = match && this.jobs.get(match[1]);
     if (!job) return json(404, { error: 'not_found', message: 'No such scan.' });
     if (method === 'DELETE') { this.deleted.push(job.id); return json(204, null); }
@@ -115,13 +115,14 @@ class FakeApp {
       format: 'png',
       createdAt: new Date().toISOString(),
       error: job.status === 'failed' ? { error: job.errorCode ?? 'paper_jam', message: 'The scanner reported a paper jam.' } : undefined,
-      pages: done ? [{
+      documents: done ? [{
         index: 0,
         mediaType: 'image/png',
         width: 10,
         height: 14,
         size: 4,
-        url: `/v1/scans/${job.id}/pages/0`,
+        pageCount: 1,
+        url: `/scanner/${job.id}/documents/0`,
         ...(job.options.stamp ? { provenance: { scanId: 'PT-AAAA-BBBB', page: 1, pageCount: 1 } } : {}),
         ...(job.options.barcodes ? { barcodeStatus: 'done', barcodes: found } : {}),
       }] : [],
@@ -155,8 +156,8 @@ test('buildScanUrl encodes origin, request id and options', () => {
   assert.equal(parsed.searchParams.get('format'), 'png');
   assert.equal(parsed.searchParams.get('v'), '1');
   assert.equal(parsed.searchParams.get('barcodes'), null);
-  assert.equal(parsed.searchParams.get('oneSheet'), null);
-  assert.equal(new URL(buildScanUrl(ORIGIN, 'abc123abc123abc123', { oneSheet: true, duplex: true })).searchParams.get('oneSheet'), 'true');
+  assert.equal(parsed.searchParams.get('maxSheets'), null);
+  assert.equal(new URL(buildScanUrl(ORIGIN, 'abc123abc123abc123', { maxSheets: 1, duplex: true })).searchParams.get('maxSheets'), '1');
 
   const withCodes = new URL(buildScanUrl(ORIGIN, 'abc123abc123abc123', { barcodes: true, barcodeFormats: ['qrCode', 'code128'] }));
   assert.equal(withCodes.searchParams.get('barcodes'), 'true');
@@ -170,8 +171,8 @@ test('scan returns the barcodes the app found', async () => {
   assert.deepEqual(app.jobs.get('job123456789abcdef').options.barcodeFormats, ['qrCode']);
   assert.equal(result.barcodes[0].text, 'PT');
   assert.equal(result.barcodes[0].rotation, 180);
-  assert.equal(result.pages[0].barcodeStatus, 'done');
-  assert.equal(result.pages[0].barcodes[0].points.length, 2);
+  assert.equal(result.documents[0].barcodeStatus, 'done');
+  assert.equal(result.documents[0].barcodes[0].points.length, 2);
 });
 
 test('scan pairs an unpaired site, polls to completion, downloads pages and cleans up', async () => {
@@ -179,9 +180,9 @@ test('scan pairs an unpaired site, polls to completion, downloads pages and clea
   const seen = [];
   const result = await client(app).scan({ dpi: 200 }, { onProgress: (job) => seen.push(job.status) });
 
-  assert.equal(result.pages.length, 1);
-  assert.equal(result.pages[0].blob.type, 'image/png');
-  assert.ok(app.calls.includes('POST /v1/pair'));
+  assert.equal(result.documents.length, 1);
+  assert.equal(result.documents[0].blob.type, 'image/png');
+  assert.ok(app.calls.includes('POST /pair'));
   assert.deepEqual(app.jobs.get('job123456789abcdef').options, { dpi: 200 });
   assert.equal(seen.at(-1), 'completed');
   await new Promise((r) => setTimeout(r, 5));
@@ -191,7 +192,7 @@ test('scan pairs an unpaired site, polls to completion, downloads pages and clea
 test('failed scans reject with the server error code', async () => {
   const app = new FakeApp({ paired: true });
   app.fetch = ((inner) => async (url, init) => {
-    if (init?.method === 'POST' && url.endsWith('/v1/scans')) {
+    if (init?.method === 'POST' && url.endsWith('/scanner')) {
       return new Response(JSON.stringify(app.addJob('jammedjob1234567890', {}, 'failed')), { status: 202 });
     }
     return inner(url, init);
@@ -222,7 +223,7 @@ test('when the app is not running and the site was paired before, scan launches 
   assert.equal(url.searchParams.get('origin'), ORIGIN);
   assert.equal(url.searchParams.get('colorMode'), 'blackWhite');
   assert.match(url.searchParams.get('request'), /^[0-9a-f]{32}$/);
-  assert.equal(result.pages.length, 1);
+  assert.equal(result.documents.length, 1);
 });
 
 test('when the app is not running and the site was never paired, scan launches the app then pairs over HTTP', async () => {
@@ -233,8 +234,8 @@ test('when the app is not running and the site was never paired, scan launches t
   const result = await c.scan();
 
   assert.deepEqual(launched, ['highbridge://launch']);
-  assert.ok(app.calls.includes('POST /v1/pair'));
-  assert.equal(result.pages.length, 1);
+  assert.ok(app.calls.includes('POST /pair'));
+  assert.equal(result.documents.length, 1);
 });
 
 test('reports not_running when the app never comes up', async () => {
@@ -293,7 +294,7 @@ test('buildScanUrl carries only the stamp position', () => {
 test('readCard returns the allowlisted fields and re-approves an old approval once', async () => {
   const app = new FakeApp({ paired: true, reapprove: true });
   const result = await client(app).readCard({ interface: 'contact', waitForCardMs: 1000 });
-  assert.deepEqual(app.calls.filter((c) => c.startsWith('POST')), ['POST /v1/card-reads', 'POST /v1/pair', 'POST /v1/card-reads']);
+  assert.deepEqual(app.calls.filter((c) => c.startsWith('POST')), ['POST /pcsc', 'POST /pair', 'POST /pcsc']);
   assert.equal(result.selected.pan, '4111111111111234');
   assert.equal(result.selected.panLast4, '1234');
   assert.equal(result.selected.expiry, '2028-12');
@@ -340,15 +341,15 @@ test('buildReadCardUrl carries the card options and nothing else', () => {
 
 test('scanSession repeats one-sheet feeder scans and stops on a flatbed or abort', async () => {
   const app = new FakeApp({ paired: true });
-  const posts = () => app.calls.filter((call) => call === 'POST /v1/scans').length;
+  const posts = () => app.calls.filter((call) => call === 'POST /scanner').length;
 
-  await client(app).scanSession({ source: 'flatbed', oneSheet: true });
+  await client(app).scanSession({ source: 'flatbed', maxSheets: 1 });
   assert.equal(posts(), 1);
 
   const again = new FakeApp({ paired: true });
   let passes = 0;
   const controller = new AbortController();
-  await client(again).scanSession({ oneSheet: true, source: 'feeder', duplex: true }, {
+  await client(again).scanSession({ maxSheets: 1, source: 'feeder', duplex: true }, {
     signal: controller.signal,
     onResult: () => {
       passes += 1;
@@ -356,18 +357,18 @@ test('scanSession repeats one-sheet feeder scans and stops on a flatbed or abort
     },
   });
   assert.equal(passes, 2);
-  assert.equal(again.calls.filter((call) => call === 'POST /v1/scans').length, 2);
-  assert.equal(again.jobs.get('job123456789abcdef').options.oneSheet, true);
+  assert.equal(again.calls.filter((call) => call === 'POST /scanner').length, 2);
+  assert.equal(again.jobs.get('job123456789abcdef').options.maxSheets, 1);
   assert.equal(again.jobs.get('job223456789abcdef').options.duplex, true);
 
   const flat = new FakeApp({ paired: true });
   let reads = 0;
   await client(flat).scanSession(() => {
     reads += 1;
-    return reads === 1 ? { oneSheet: true, source: 'feeder' } : { source: 'flatbed', oneSheet: true };
+    return reads === 1 ? { maxSheets: 1, source: 'feeder' } : { source: 'flatbed', maxSheets: 1 };
   });
   assert.equal(reads, 2);
-  assert.equal(flat.calls.filter((call) => call === 'POST /v1/scans').length, 2);
+  assert.equal(flat.calls.filter((call) => call === 'POST /scanner').length, 2);
 });
 
 test('scanSession keeps going when the feeder is empty and stops on a jam', async () => {
@@ -375,7 +376,7 @@ test('scanSession keeps going when the feeder is empty and stops on a jam', asyn
   app.scanScript = [{ outcome: 'failed', errorCode: 'no_pages' }];
   let passes = 0;
   const controller = new AbortController();
-  await client(app).scanSession({ oneSheet: true, source: 'feeder' }, {
+  await client(app).scanSession({ maxSheets: 1, source: 'feeder' }, {
     signal: controller.signal,
     onResult: () => {
       passes += 1;
@@ -383,22 +384,22 @@ test('scanSession keeps going when the feeder is empty and stops on a jam', asyn
     },
   });
   assert.equal(passes, 1);
-  assert.equal(app.calls.filter((call) => call === 'POST /v1/scans').length, 2);
+  assert.equal(app.calls.filter((call) => call === 'POST /scanner').length, 2);
   assert.ok(app.deleted.includes('job123456789abcdef'));
 
   const jammed = new FakeApp({ paired: true });
   jammed.scanScript = [{ outcome: 'failed', errorCode: 'paper_jam' }];
   await assert.rejects(
-    client(jammed).scanSession({ oneSheet: true, source: 'feeder' }),
+    client(jammed).scanSession({ maxSheets: 1, source: 'feeder' }),
     (err) => err instanceof HighbridgeError && err.code === 'paper_jam',
   );
-  assert.equal(jammed.calls.filter((call) => call === 'POST /v1/scans').length, 1);
+  assert.equal(jammed.calls.filter((call) => call === 'POST /scanner').length, 1);
 });
 
 test('a one-sheet scan that did not use the feeder is not repeated', async () => {
   const app = new FakeApp({ paired: true });
-  await client(app).scanSession({ oneSheet: true, source: 'auto', usedFeeder: false });
-  assert.equal(app.calls.filter((call) => call === 'POST /v1/scans').length, 1);
+  await client(app).scanSession({ maxSheets: 1, source: 'auto', usedFeeder: false });
+  assert.equal(app.calls.filter((call) => call === 'POST /scanner').length, 1);
 });
 
 test('readCardSession waits for removal and retries an empty reader', async () => {
@@ -418,7 +419,7 @@ test('readCardSession waits for removal and retries an empty reader', async () =
   assert.equal(jobs[0].options.interface, 'auto');
   assert.equal(jobs[1].options.waitForRemoval, true);
   assert.equal(jobs[1].options.interface, 'auto');
-  assert.equal(app.calls.filter((call) => call === 'POST /v1/card-reads').length, 2);
+  assert.equal(app.calls.filter((call) => call === 'POST /pcsc').length, 2);
 
   const empty = new FakeApp({ paired: true });
   empty.cardScript = [{ outcome: 'failed', errorCode: 'no_card' }];
@@ -432,7 +433,7 @@ test('readCardSession waits for removal and retries an empty reader', async () =
     },
   });
   assert.equal(passes, 1);
-  assert.equal(empty.calls.filter((call) => call === 'POST /v1/card-reads').length, 2);
+  assert.equal(empty.calls.filter((call) => call === 'POST /pcsc').length, 2);
   assert.equal([...empty.cardJobs.values()][1].options.waitForRemoval, undefined);
 
   const failed = new FakeApp({ paired: true });
@@ -441,7 +442,7 @@ test('readCardSession waits for removal and retries an empty reader', async () =
     client(failed).readCardSession({ interface: 'auto' }),
     (err) => err instanceof HighbridgeError && err.code === 'read_failed',
   );
-  assert.equal(failed.calls.filter((call) => call === 'POST /v1/card-reads').length, 1);
+  assert.equal(failed.calls.filter((call) => call === 'POST /pcsc').length, 1);
 });
 
 test('stamped scan returns provenance and re-approves an old approval once', async () => {
@@ -449,7 +450,7 @@ test('stamped scan returns provenance and re-approves an old approval once', asy
 
   const result = await client(app).scan({ stamp: { position: 'top' } });
 
-  assert.deepEqual(app.calls.filter((c) => c.startsWith('POST')), ['POST /v1/scans', 'POST /v1/pair', 'POST /v1/scans']);
+  assert.deepEqual(app.calls.filter((c) => c.startsWith('POST')), ['POST /scanner', 'POST /pair', 'POST /scanner']);
   assert.deepEqual(result.stamp, { position: 'top', requiredByPolicy: false, scanId: 'PT-AAAA-BBBB' });
-  assert.equal(result.pages[0].provenance.scanId, 'PT-AAAA-BBBB');
+  assert.equal(result.documents[0].provenance.scanId, 'PT-AAAA-BBBB');
 });

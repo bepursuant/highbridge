@@ -3,14 +3,14 @@ export declare const DEFAULT_PORT: 47116;
 export type ColorMode = 'color' | 'gray' | 'blackWhite';
 export type PaperSource = 'auto' | 'flatbed' | 'feeder';
 export type ScanStatus = 'queued' | 'scanning' | 'completed' | 'failed' | 'canceled';
-/** Only 'png' (one image per page) today. */
+/** Only 'png' (one stacked document) today. */
 export type OutputFormat = 'png';
 
 export type StampPosition = 'top' | 'bottom';
 
 /**
- * Asks highbridge to add its provenance band to each page. The page can only choose the
- * position: every value in the band comes from highbridge. Policy may also require the stamp.
+ * Asks highbridge to add its provenance band once on each finished document. The page can only
+ * choose the position: every value in the band comes from highbridge. Policy may also require the stamp.
  */
 export interface StampOptions {
   position?: StampPosition;
@@ -31,7 +31,7 @@ export interface PageProvenance {
   origin: string;
   page: number;
   pageCount: number;
-  /** SHA-256 of the page before the band was added (canonical pixels, see hashMethod). */
+  /** SHA-256 of the stacked document before the band was added (canonical pixels, see hashMethod). */
   originalSha256: string;
   hashMethod: 'highbridge-pixels-v1';
   position: StampPosition;
@@ -51,16 +51,22 @@ export interface ScanOptions {
   colorMode?: ColorMode;
   source?: PaperSource;
   duplex?: boolean;
-  /**
-   * One feeder sheet per job. With duplex, that is the front and the back only. An empty feeder
-   * waits. Off, one job takes the whole feeder. A flatbed stays one shot.
-   */
-  oneSheet?: boolean;
   showDriverUi?: boolean;
-  maxPages?: number;
+  /**
+   * 0 means one document holds every page. A positive value closes the current document once it
+   * holds that many pages. The front and back of one sheet are two pages.
+   */
+  maxPagesPerDocument?: number;
+  /**
+   * 0 means no limit. A positive value stops the feeder after that many sheets. Duplex still
+   * returns both sides. A flatbed stays one shot. `scanSession` repeats while this is above zero.
+   */
+  maxSheets?: number;
+  /** Clockwise turn applied to each page before stacking, stamping, or barcode search. */
+  orientation?: 0 | 90 | 180 | 270;
   format?: OutputFormat;
   stamp?: StampOptions | null;
-  /** Find barcodes on every page. */
+  /** Find barcodes on every finished document. */
   barcodes?: boolean;
   /** Formats to look for (needs `barcodes: true`); default: every format except aztec, code93 and codabar. */
   barcodeFormats?: BarcodeFormat[];
@@ -75,11 +81,11 @@ export type BarcodeFormat =
 export type BarcodeStatus = 'pending' | 'done' | 'partial' | 'failed' | 'skipped';
 
 export interface Barcode {
-  /** Index of the page it is on. */
+  /** Index of the document it is on. */
   page: number;
   format: BarcodeFormat;
   text: string;
-  /** Detection pass that found it: the page turned clockwise by 0, 90, 180 or 270 degrees. */
+  /** How the document was turned when this code was read. A scan that set orientation searches that orientation only. */
   rotation: 0 | 90 | 180 | 270;
   /** Reading direction on the page, degrees clockwise (0 upright, 180 upside down); absent when unknown. */
   orientation?: number;
@@ -114,14 +120,16 @@ export interface ScannerInfo {
   isDefault: boolean;
 }
 
-export interface PageInfo {
+export interface DocumentInfo {
   index: number;
   mediaType: string;
   width: number;
   height: number;
   size: number;
   url: string;
-  /** Only on stamped pages. */
+  /** How many pages were stacked into this file. */
+  pageCount: number;
+  /** Only on a stamped document. */
   provenance?: PageProvenance;
   /** Only when the scan asked for barcodes. */
   barcodeStatus?: BarcodeStatus;
@@ -136,23 +144,23 @@ export interface ScanJob {
   createdAt: string;
   finishedAt?: string;
   error?: { error: string; message: string };
-  pages: PageInfo[];
-  /** Pages received so far. Stamped scans list their pages only once all are stamped. */
+  documents: DocumentInfo[];
+  /** Pages received from the scanner so far. Documents appear once they are stacked. */
   pagesScanned: number;
   stamp?: StampInfo;
-  /** Every page's barcodes in page order; only when the scan asked for barcodes. */
+  /** Every document's barcodes in document order; only when the scan asked for barcodes. */
   barcodes?: Barcode[];
-  /** One-sheet jobs only. False when the scanner did not use the feeder. */
+  /** False when the scanner did not use the feeder. */
   usedFeeder?: boolean;
 }
 
 export interface ScanResult {
   id: string;
-  pages: Array<PageInfo & { blob: Blob }>;
+  documents: Array<DocumentInfo & { blob: Blob }>;
   stamp?: StampInfo;
-  /** Every page's barcodes in page order; only when the scan asked for barcodes. */
+  /** Every document's barcodes in document order; only when the scan asked for barcodes. */
   barcodes?: Barcode[];
-  /** Copied from the job when the scan was one sheet. False means do not loop. */
+  /** False when the scanner did not use the feeder. `scanSession` stops when this is false. */
   usedFeeder?: boolean;
 }
 
@@ -272,6 +280,8 @@ export declare function buildReadCardUrl(origin: string, requestId: string, opti
  * Maps barcode points onto the image the page downloaded. Detection runs before the stamp, so a
  * band at the top shifts every point down by `provenance.bandHeight`. A bottom band does not.
  */
+export declare function optionsFromAttributes(element: Element, fields: Array<[string, string, string?]>): Record<string, unknown>;
+
 export declare function barcodePointsOnImage(
   provenance: PageProvenance | null | undefined,
   points: Array<{ x: number; y: number }>,

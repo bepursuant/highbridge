@@ -65,15 +65,14 @@ public sealed class JobBarcodes
     }
 
     /// <summary>Hands <paramref name="page"/> to the worker. Call with the page as the scanner delivered it.</summary>
-    public void Enqueue(ScannedPage page, BarcodeWorker worker, CancellationToken cancellationToken)
+    public void Enqueue(ScannedPage page, BarcodeWorker worker, CancellationToken cancellationToken, bool orientationApplied = false)
     {
-        // Copy now, on the scanner's thread: detection runs later, and a later step (a stamp) may
-        // change the page bytes. The copy is what was scanned.
+        // Copy now: detection runs later, and a stamp may replace the bytes that get published.
         var original = new ScannedPage(page.Index, page.MediaType, page.Width, page.Height, page.Data.ToArray());
         lock (_gate)
         {
             _pages[page.Index] = PageBarcodes.Pending;
-            _work.Add(worker.EnqueueAsync(original, Formats, cancellationToken).ContinueWith(
+            _work.Add(worker.EnqueueAsync(original, Formats, cancellationToken, orientationApplied).ContinueWith(
                 t => Set(page.Index, t.Result),
                 CancellationToken.None,
                 TaskContinuationOptions.ExecuteSynchronously,

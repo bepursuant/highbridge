@@ -1,5 +1,7 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Highbridge.Barcodes;
 using Highbridge.Cards;
 using Highbridge.Provenance;
@@ -24,11 +26,12 @@ public sealed record ProtocolCommand(
     string? Origin,
     string? RequestId,
     ScanOptions Options,
-    CardReadOptions? CardRead = null);
+    CardReadOptions? CardRead = null,
+    JsonElement? Fields = null);
 
 /// <summary>
 /// Parses and builds <c>highbridge://</c> URLs. Query parameter names match the JSON body of
-/// <c>POST /v1/scans</c> or <c>POST /v1/card-reads</c>, plus <c>v</c> (protocol version),
+/// <c>POST /scanner</c> or <c>POST /pcsc</c>, plus <c>v</c> (protocol version),
 /// <c>origin</c> and <c>request</c>.
 /// </summary>
 public static class HighbridgeUri
@@ -121,7 +124,7 @@ public static class HighbridgeUri
                 return false;
             }
 
-            command = new ProtocolCommand(action, origin, requestId, new ScanOptions(), cardRead);
+            command = new ProtocolCommand(action, origin, requestId, new ScanOptions(), cardRead, PresentFields(cardRead, parameters));
             return true;
         }
 
@@ -130,7 +133,7 @@ public static class HighbridgeUri
             return false;
         }
 
-        command = new ProtocolCommand(action, origin, requestId, options);
+        command = new ProtocolCommand(action, origin, requestId, options, Fields: PresentFields(options, parameters));
         return true;
     }
 
@@ -150,19 +153,24 @@ public static class HighbridgeUri
         Append(sb, "colorMode", ToCamel(options.ColorMode.ToString()));
         Append(sb, "source", ToCamel(options.Source.ToString()));
         Append(sb, "duplex", options.Duplex ? "true" : "false");
-        if (options.OneSheet)
-        {
-            Append(sb, "oneSheet", "true");
-        }
-
         if (options.ShowDriverUi)
         {
             Append(sb, "showDriverUi", "true");
         }
 
-        if (options.MaxPages > 0)
+        if (options.MaxPagesPerDocument > 0)
         {
-            Append(sb, "maxPages", options.MaxPages.ToString(CultureInfo.InvariantCulture));
+            Append(sb, "maxPagesPerDocument", options.MaxPagesPerDocument.ToString(CultureInfo.InvariantCulture));
+        }
+
+        if (options.MaxSheets > 0)
+        {
+            Append(sb, "maxSheets", options.MaxSheets.ToString(CultureInfo.InvariantCulture));
+        }
+
+        if (options.Orientation != 0)
+        {
+            Append(sb, "orientation", options.Orientation.ToString(CultureInfo.InvariantCulture));
         }
 
         Append(sb, "format", ToCamel(options.Format.ToString()));
@@ -325,24 +333,26 @@ public static class HighbridgeUri
         }
 
         if (!TryReadBool(p, "duplex", out bool? duplex, ref error)
-            || !TryReadBool(p, "showDriverUi", out bool? showUi, ref error)
-            || !TryReadBool(p, "oneSheet", out bool? oneSheet, ref error))
+            || !TryReadBool(p, "showDriverUi", out bool? showUi, ref error))
         {
             return false;
         }
 
-        options = options with { Duplex = duplex ?? false, ShowDriverUi = showUi ?? false, OneSheet = oneSheet ?? false };
+        options = options with { Duplex = duplex ?? false, ShowDriverUi = showUi ?? false };
 
-        if (p.TryGetValue("maxPages", out string? maxPages))
+        if (!TryReadCount(p, "maxPagesPerDocument", out int? perDocument, ref error)
+            || !TryReadCount(p, "maxSheets", out int? maxSheets, ref error)
+            || !TryReadCount(p, "orientation", out int? orientation, ref error))
         {
-            if (!int.TryParse(maxPages, NumberStyles.None, CultureInfo.InvariantCulture, out int value))
-            {
-                error = "maxPages must be a whole number";
-                return false;
-            }
-
-            options = options with { MaxPages = value };
+            return false;
         }
+
+        options = options with
+        {
+            MaxPagesPerDocument = perDocument ?? 0,
+            MaxSheets = maxSheets ?? 0,
+            Orientation = orientation ?? 0,
+        };
 
         if (p.TryGetValue("format", out string? format))
         {
@@ -380,6 +390,39 @@ public static class HighbridgeUri
         }
 
         return true;
+    }
+
+    private static bool TryReadCount(Dictionary<string, string> p, string key, out int? value, ref string? error)
+    {
+        value = null;
+        if (!p.TryGetValue(key, out string? raw))
+        {
+            return true;
+        }
+
+        if (!int.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out int parsed))
+        {
+            error = $"{key} must be a whole number";
+            return false;
+        }
+
+        value = parsed;
+        return true;
+    }
+
+    /// <summary>JSON for only the query fields the page actually sent, shaped like the module POCO.</summary>
+    private static JsonElement PresentFields<T>(T options, Dictionary<string, string> parameters)
+    {
+        var node = JsonSerializer.SerializeToNode(options, HighbridgeJson.Options)!.AsObject();
+        foreach (string key in node.Select(property => property.Key).ToArray())
+        {
+            if (!parameters.ContainsKey(key))
+            {
+                node.Remove(key);
+            }
+        }
+
+        return JsonSerializer.SerializeToElement(node, HighbridgeJson.Options);
     }
 
     private static bool TryReadBool(Dictionary<string, string> p, string key, out bool? value, ref string? error)

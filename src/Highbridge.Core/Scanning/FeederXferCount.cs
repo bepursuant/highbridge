@@ -30,17 +30,24 @@ public static partial class FeederXferCount
 
     /// <summary>
     /// Null leaves CAP_XFERCOUNT unset (the source scans until the feeder is empty).
-    /// Otherwise the value to set: images for a spec-counting feeder, one sheet for a
-    /// sheet-counting feeder when <see cref="ScanOptions.OneSheet"/> is on.
+    /// A flatbed is one shot and does not use this capability.
+    /// Otherwise the value to set: <see cref="ScanOptions.MaxSheets"/> for a sheet-counting
+    /// feeder (never a page count), or that many sheets times the number of sides for an
+    /// image-counting feeder.
     /// </summary>
     public static int? Value(ScanOptions options, bool countsSheets)
     {
-        if (options.EffectivePageLimit() is not int images)
+        if (options.Source == PaperSource.Flatbed || options.MaxSheets <= 0)
         {
             return null;
         }
 
-        return options.OneSheet && countsSheets ? 1 : images;
+        if (countsSheets)
+        {
+            return options.MaxSheets;
+        }
+
+        return options.MaxSheets * (options.Duplex ? 2 : 1);
     }
 
     [GeneratedRegex(@"\bfi-\d{3,4}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]

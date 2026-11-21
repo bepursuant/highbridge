@@ -50,25 +50,25 @@ highbridge lets an HTTPS web app start a document scan on the user's Windows PC 
 
 Steady state for a paired site on a machine where the LNA permission is granted: one click on the page, scan, no dialogs.
 
-## 4. Local API (v1)
+## 4. Local API
 
 | Method & path | Who | Purpose |
 |---|---|---|
-| `GET /v1/status` | any valid origin | `{app, version, apiVersion, backend, devices, paired, pairingAllowed}` |
-| `POST /v1/pair` | any valid origin | Shows the pairing prompt; returns `{paired}` |
-| `GET /v1/scanners` | paired | List sources |
-| `POST /v1/scans` | paired | `{scannerId?, dpi, colorMode, duplex, oneSheet?, source, showDriverUi, maxPages, format: "png", stamp?: {position}, barcodes?, barcodeFormats?}` → `202 {id, status, format, stamp?, pagesScanned, usedFeeder?, …}` |
-| `GET /v1/scans/{id}` | job owner | Status (`queued`, `scanning`, `completed`, `failed`, `canceled`) plus page list, and barcodes when requested. Also claims a protocol-launched job |
-| `GET /v1/scans/{id}/pages/{n}` | job owner | `image/png` |
-| `DELETE /v1/scans/{id}` | job owner | Discard |
-| `GET /v1/card-readers` | current approval | `{readers: [{id, name, backend}]}` |
-| `POST /v1/card-reads` | current approval | `{readerId?, interface, aid?, waitForCardMs?, waitForRemoval?}` → `202` |
-| `GET /v1/card-reads/{id}` | job owner | Status, and the allowlisted card fields when completed. Claims a protocol job |
-| `DELETE /v1/card-reads/{id}` | job owner | Discard |
+| `GET /status` | any valid origin | `{app, version, apiVersion, backend, devices, paired, pairingAllowed}` |
+| `POST /pair` | any valid origin | Shows the pairing prompt; returns `{paired}` |
+| `GET /scanner` | paired | List sources |
+| `POST /scanner` | paired | `{scannerId?, dpi, colorMode, duplex, source, showDriverUi, maxPagesPerDocument, maxSheets, orientation, format: "png", stamp?: {position}, barcodes?, barcodeFormats?}`. Omitted fields use the scanner's saved defaults. → `202 {id, status, format, stamp?, pagesScanned, usedFeeder?, documents}` |
+| `GET /scanner/{id}` | job owner | Status (`queued`, `scanning`, `completed`, `failed`, `canceled`) plus documents, and barcodes when requested. Also claims a protocol-launched job |
+| `GET /scanner/{id}/documents/{n}` | job owner | `image/png` of one stacked document |
+| `DELETE /scanner/{id}` | job owner | Discard |
+| `GET /pcsc` | current approval | `{readers: [{id, name, backend}]}` |
+| `POST /pcsc` | current approval | `{readerId?, interface, aid?, waitForCardMs?, waitForRemoval?}`. Omitted fields use the reader's saved defaults. → `202` |
+| `GET /pcsc/{id}` | job owner | Status, and the allowlisted card fields when completed. Claims a protocol job |
+| `DELETE /pcsc/{id}` | job owner | Discard |
 
 JS client (`clients/js/highbridge.js`, an ES module with no dependencies): `status()`, `pair()`, `listScanners()`, `scan(options)`, `listCardReaders()`, and `readCard(options)`. If the app is not reachable, `scan` falls back to `highbridge://scan` and `readCard` falls back to `highbridge://read-card`. Both poll by request id, which claims the job.
 
-`scanSession` and `readCardSession` arm a session from one click. The client repeats the existing POST and `GET` status poll (`pollIntervalMs` is unchanged) until Stop or an error that needs a person. There is no WebSocket and no long-poll. A card session sets `waitForRemoval` after the first card, so the next read starts only once that card has left the slot; contact and contactless stay on the requested interface (`auto` unless the page says otherwise). The card number is still only on the completed job, over `127.0.0.1`. `oneSheet: true` makes one feeder scan one sheet — the front and the back when duplex is on, and nothing after them. A feeder that counts `CAP_XFERCOUNT` in images (the Ambir nScan 690gt) is asked for that many images. A feeder that counts sheets (PaperStream IP on the Ricoh fi-8170) is asked for one sheet; asking it for two images feeds a second sheet, and resetting that transfer crashes the driver. The job waits while `CAP_FEEDERLOADED` says the feeder is empty instead of failing the session. With `oneSheet` off, one job still pulls the whole feeder. A flatbed scan is not repeated. Form options are read again on every cycle when the page passes a function. Pairing, the claim timeout, and the one-job-at-a-time locks are unchanged.
+`scanSession` and `readCardSession` arm a session from one click. The client repeats the existing POST and `GET` status poll (`pollIntervalMs` is unchanged) until Stop or an error that needs a person. There is no WebSocket and no long-poll. A card session sets `waitForRemoval` after the first card, so the next read starts only once that card has left the slot; contact and contactless stay on the requested interface (`auto` unless the page says otherwise). The card number is still only on the completed job, over `127.0.0.1`. `maxSheets` above zero stops the feeder after that many sheets — the front and the back when duplex is on, and nothing after them. `scanSession` repeats while `maxSheets` is above zero and the scan used the feeder. A feeder that counts `CAP_XFERCOUNT` in images (the Ambir nScan 690gt) is asked for sheets times sides. A feeder that counts sheets (PaperStream IP on the Ricoh fi-8170) is asked for that many sheets; asking it for images feeds extra sheets, and resetting that transfer crashes the driver. The job waits while `CAP_FEEDERLOADED` says the feeder is empty instead of failing the session. With `maxSheets` at 0, one job still pulls the whole feeder. A flatbed scan is not repeated. Form options are read again on every cycle when the page passes a function. Pairing, the claim timeout, and the one-job-at-a-time locks are unchanged.
 
 ### Barcode recognition
 
@@ -76,7 +76,7 @@ Optional, off unless the request sets `barcodes: true` (the same flag in a `high
 
 `ScanJobManager` copies each page's bytes in the scanner callback and queues them to `BarcodeWorker` (at most two below-normal threads), so detection never runs on the TWAIN thread and it sees the page before anything else, such as a stamp, can change it. The job stays `scanning` until the pages are analysed or 30 seconds after the scanner finishes, whichever is first. Each page gets 3 seconds. A page is `done`, `partial` (budget ran out), `failed` (the image could not be read) or `skipped`. Nothing about barcodes fails the scan.
 
-ZXing.Net reads luminance from highbridge's own PNG decoder (no image-binding package). QR, Data Matrix, Aztec and PDF417 are searched at any angle; 1D codes are searched with the page turned 0/90/180/270. `TryHarder` is on, and the upright pass also uses `TryInverted`. Pages larger than 12 million pixels (past 300 dpi on A4) are shrunk first. A UPC-E or EAN-8 read that lies along a longer 1D code is dropped.
+ZXing.Net reads luminance from highbridge's own PNG decoder (no image-binding package). A scan searches the finished document in the orientation it already applied, including full-width strips for a faded Code 128. `TryHarder` is on, and the upright pass also uses `TryInverted`. Documents larger than 12 million pixels (past 300 dpi on A4) are shrunk first. A UPC-E or EAN-8 read that lies along a longer 1D code is dropped.
 
 On this machine, one page, decode plus detection, median of three runs:
 

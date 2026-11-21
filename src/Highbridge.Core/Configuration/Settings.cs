@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Highbridge.Provenance;
 
@@ -7,6 +8,12 @@ namespace Highbridge.Configuration;
 public sealed class HighbridgeSettings
 {
     public List<PairedOrigin> PairedOrigins { get; set; } = [];
+
+    /// <summary>
+    /// Saved option defaults, keyed by module (<c>scanner</c>, <c>pcsc</c>) and then by physical device id.
+    /// A field a page omits comes from here. A field the page sends replaces it.
+    /// </summary>
+    public Dictionary<string, Dictionary<string, JsonObject>> Devices { get; set; } = new(StringComparer.Ordinal);
 }
 
 public sealed class PairedOrigin
@@ -106,6 +113,35 @@ public sealed class SettingsStore
         {
             return Clone(_current);
         }
+    }
+
+    public JsonObject? DeviceOptions(string module, string? deviceId)
+    {
+        if (string.IsNullOrEmpty(deviceId))
+        {
+            return null;
+        }
+
+        lock (_gate)
+        {
+            return _current.Devices.TryGetValue(module, out var devices) && devices.TryGetValue(deviceId, out var options)
+                ? options
+                : null;
+        }
+    }
+
+    public void SaveDeviceOptions(string module, string deviceId, JsonObject options)
+    {
+        Update(settings =>
+        {
+            if (!settings.Devices.TryGetValue(module, out var devices))
+            {
+                devices = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+                settings.Devices[module] = devices;
+            }
+
+            devices[deviceId] = options;
+        });
     }
 
     public void Update(Action<HighbridgeSettings> mutate)

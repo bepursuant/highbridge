@@ -169,7 +169,7 @@ internal sealed class TwainScan
             return;
         }
 
-        if (_options.EffectivePageLimit() is int limit && _pages.Count >= limit)
+        if (_options.ImageLimit() is int limit && _pages.Count >= limit)
         {
             if (_negotiated.SheetCountedFeeder)
             {
@@ -323,9 +323,9 @@ internal sealed class TwainScan
 
     private void AddPage(ScannedPage page)
     {
-        if (_negotiated.SheetCountedFeeder && _options.EffectivePageLimit() is int limit && _pages.Count >= limit)
+        if (_negotiated.SheetCountedFeeder && _options.ImageLimit() is int limit && _pages.Count >= limit)
         {
-            _logger.LogInformation("Ignoring page {Page}; the one-sheet limit is {Limit} and this feeder cannot be reset", _pages.Count + 1, limit);
+            _logger.LogInformation("Ignoring page {Page}; the sheet limit is {Limit} image(s) and this feeder cannot be reset", _pages.Count + 1, limit);
             return;
         }
 

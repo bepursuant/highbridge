@@ -56,7 +56,7 @@ public sealed class ProvenanceStamping
         {
             throw new JobRejectedException(
                 "approval_required",
-                "Stamped scans include your Windows user name and computer name. Approve this site again (POST /v1/pair) to allow that.");
+                "Stamped scans include your Windows user name and computer name. Approve this site again (POST /pair) to allow that.");
         }
 
         var stamp = requested ?? new StampOptions();
@@ -75,7 +75,7 @@ public sealed class ProvenanceStamping
         return $"HB-{id[..4]}-{id[4..]}";
     }
 
-    /// <summary>Stamps every page of a finished scan ("page N of M" needs them all).</summary>
+    /// <summary>Stamps each finished document once. The band's page numbers are the document's place in the scan.</summary>
     public IReadOnlyList<ScannedPage> StampAll(
         IReadOnlyList<ReceivedPage> pages,
         StampOptions stamp,

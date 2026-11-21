@@ -299,7 +299,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
             return;
         }
 
-        _devicesForm = new DevicesForm(LoadDevicesAsync, _logProvider.LogDirectory);
+        _devicesForm = new DevicesForm(
+            LoadDevicesAsync,
+            (module, cancellationToken) => module.ListAsync(_runtime, cancellationToken),
+            _runtime.Settings,
+            _logProvider.LogDirectory,
+            DeviceModules.All);
         _devicesForm.Show();
     }
 
