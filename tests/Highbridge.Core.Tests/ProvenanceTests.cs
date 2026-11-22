@@ -338,7 +338,7 @@ public class ProvenanceJobTests
     public async Task Holds_pages_until_the_whole_scan_is_stamped()
     {
         var backend = new GatedBackend();
-        using var runtime = Runtime(backend: backend);
+        using var runtime = Runtime(scannerBackend: backend);
         runtime.Origins.Pair(Origin);
 
         var job = runtime.Jobs.Start(Origin, new ScanOptions { Stamp = new StampOptions() }, ScanTrigger.Api);
@@ -358,7 +358,7 @@ public class ProvenanceJobTests
     [Fact]
     public async Task A_page_that_cannot_be_stamped_fails_the_scan_without_releasing_pages()
     {
-        using var runtime = Runtime(backend: new GatedBackend(pageData: [1, 2, 3], released: true));
+        using var runtime = Runtime(scannerBackend: new GatedBackend(pageData: [1, 2, 3], released: true));
         runtime.Origins.Pair(Origin);
 
         var job = runtime.Jobs.Start(Origin, new ScanOptions { Stamp = new StampOptions() }, ScanTrigger.Api);
@@ -401,9 +401,9 @@ public class ProvenanceJobTests
         }
     }
 
-    private static HighbridgeRuntime Runtime(HighbridgePolicy? policy = null, TimeProvider? time = null, IScannerBackend? backend = null) =>
+    private static HighbridgeRuntime Runtime(HighbridgePolicy? policy = null, TimeProvider? time = null, IScannerBackend? scannerBackend = null) =>
         new(
-            backend ?? TestRuntime.FastMock(),
+            scannerBackend ?? TestRuntime.FastMock(),
             new MockCardReaderBackend(),
             new FixedConsentService(allow: true),
             new SettingsStore(path: null),

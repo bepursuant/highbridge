@@ -56,7 +56,7 @@ public class CardReadTests
     public async Task The_next_read_waits_until_the_card_has_left_the_slot()
     {
         var backend = new MockCardReaderBackend { CardPresent = true };
-        using var runtime = TestRuntime.Create(cardReader: backend);
+        using var runtime = TestRuntime.Create(cardReaderBackend: backend);
         runtime.Origins.Pair(Origin);
 
         var first = runtime.CardReads.Start(Origin, new CardReadOptions { Interface = CardInterface.Auto }, CardReadTrigger.Api);
@@ -114,7 +114,7 @@ public class CardReadTests
     {
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var runtime = TestRuntime.Create(cardReader: new GatedCards(started, release));
+        using var runtime = TestRuntime.Create(cardReaderBackend: new GatedCards(started, release));
         runtime.Origins.Pair(Origin);
 
         var read = runtime.CardReads.Start(Origin, new CardReadOptions(), CardReadTrigger.Api);

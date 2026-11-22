@@ -123,7 +123,7 @@ public class BarcodeJobTests
     [Fact]
     public async Task Requested_barcodes_come_back_per_page_and_as_one_list()
     {
-        using var runtime = TestRuntime.Create(backend: new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.Zero, FeederSheets = 1 }));
+        using var runtime = TestRuntime.Create(scannerBackend: new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.Zero, FeederSheets = 1 }));
         runtime.Origins.Pair(Origin);
 
         var job = runtime.Jobs.Start(Origin, new ScanOptions
@@ -194,7 +194,7 @@ public class BarcodeJobTests
 
             statusWhenCallbackReturned = _job.Barcodes!.ForPage(0).Status;
         });
-        using var runtime = TestRuntime.Create(backend: backend);
+        using var runtime = TestRuntime.Create(scannerBackend: backend);
         runtime.Origins.Pair(Origin);
 
         _job = runtime.Jobs.Start(Origin, new ScanOptions { Barcodes = true, Dpi = 120 }, ScanTrigger.Api);

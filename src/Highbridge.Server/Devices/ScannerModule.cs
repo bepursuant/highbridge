@@ -1,6 +1,8 @@
 using System.Text.Json;
+using Highbridge.Barcodes;
 using Highbridge.Devices;
 using Highbridge.Jobs;
+using Highbridge.Provenance;
 using Highbridge.Scanning;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -27,7 +29,7 @@ public sealed class ScannerModule : IDeviceModule
 
     public async Task<IReadOnlyList<DeviceListing>> ListAsync(HighbridgeRuntime runtime, CancellationToken cancellationToken)
     {
-        var scanners = await runtime.Backend.ListScannersAsync(cancellationToken).ConfigureAwait(false);
+        var scanners = await runtime.ScannerBackend.ListScannersAsync(cancellationToken).ConfigureAwait(false);
         return scanners
             .OrderByDescending(scanner => scanner.IsDefault)
             .ThenBy(scanner => scanner.Name, StringComparer.OrdinalIgnoreCase)
@@ -48,7 +50,7 @@ public sealed class ScannerModule : IDeviceModule
 
             try
             {
-                var scanners = await runtime.Backend.ListScannersAsync(ctx.RequestAborted).ConfigureAwait(false);
+                var scanners = await runtime.ScannerBackend.ListScannersAsync(ctx.RequestAborted).ConfigureAwait(false);
                 return Results.Ok(new ScannersResponse(scanners));
             }
             catch (ScannerException ex)
@@ -68,7 +70,7 @@ public sealed class ScannerModule : IDeviceModule
             try
             {
                 var request = await RequestBody.ReadAsync(ctx.Request, ctx.RequestAborted).ConfigureAwait(false);
-                options = await DeviceOptions.ResolveScanAsync(runtime.Settings, runtime.Backend, request, ctx.RequestAborted).ConfigureAwait(false);
+                options = await DeviceOptions.ResolveScanAsync(runtime.Settings, runtime.ScannerBackend, request, ctx.RequestAborted).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is JsonException or InvalidOperationException or BadHttpRequestException)
             {
@@ -123,4 +125,64 @@ public sealed class ScannerModule : IDeviceModule
                 : Hub.Error(StatusCodes.Status404NotFound, "not_found", "No such scan.");
         });
     }
+}
+
+public sealed record ScannersResponse(IReadOnlyList<ScannerInfo> Scanners);
+
+/// <param name="Provenance">Only on a stamped document.</param>
+/// <param name="BarcodeStatus">Only when the scan asked for barcodes, like <paramref name="Barcodes"/>.</param>
+/// <param name="PageCount">How many pages were stacked into this file.</param>
+public sealed record DocumentResponse(
+    int Index,
+    string MediaType,
+    int Width,
+    int Height,
+    int Size,
+    string Url,
+    int PageCount,
+    PageProvenance? Provenance = null,
+    BarcodeStatus? BarcodeStatus = null,
+    IReadOnlyList<BarcodeResult>? Barcodes = null);
+
+/// <summary>The stamp a job actually gets, after policy.</summary>
+public sealed record StampResponse(StampPosition Position, bool RequiredByPolicy, string ScanId);
+
+/// <param name="Barcodes">Every document's barcodes in one list; only when the scan asked for barcodes.</param>
+public sealed record ScanJobResponse(
+    string Id,
+    ScanJobStatus Status,
+    ScanTrigger Trigger,
+    OutputFormat Format,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? FinishedAt,
+    ErrorResponse? Error,
+    IReadOnlyList<DocumentResponse> Documents,
+    IReadOnlyList<BarcodeResult>? Barcodes = null)
+{
+    public StampResponse? Stamp { get; init; }
+
+    /// <summary>Pages received from the scanner so far. Documents appear once they are stacked.</summary>
+    public int PagesScanned { get; init; }
+
+    /// <summary>False when the scanner did not use the feeder.</summary>
+    public bool? UsedFeeder { get; init; }
+
+    public static ScanJobResponse From(ScanJob job) => new(
+        job.Id,
+        job.Status,
+        job.Trigger,
+        job.Options.Format,
+        job.CreatedAt,
+        job.FinishedAt,
+        job.ErrorCode is null ? null : new ErrorResponse(job.ErrorCode, job.ErrorMessage ?? job.ErrorCode),
+        job.Documents.Select(document => WithBarcodes(new DocumentResponse(document.Index, document.MediaType, document.Width, document.Height, document.Data.Length, $"/scanner/{job.Id}/documents/{document.Index}", document.PageCount, document.Provenance), job.Barcodes)).ToArray(),
+        job.Barcodes?.All)
+    {
+        Stamp = job.Stamp is { } stamp ? new StampResponse(stamp.Position, job.StampRequiredByPolicy, job.ScanId!) : null,
+        PagesScanned = job.PagesScanned,
+        UsedFeeder = job.UsedFeeder,
+    };
+
+    private static DocumentResponse WithBarcodes(DocumentResponse document, JobBarcodes? barcodes) =>
+        barcodes?.ForPage(document.Index) is { } found ? document with { BarcodeStatus = found.Status, Barcodes = found.Barcodes } : document;
 }

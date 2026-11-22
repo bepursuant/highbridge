@@ -42,7 +42,7 @@ public sealed class ScanJobManager : IDisposable
     /// </summary>
     public static readonly TimeSpan BarcodeWaitAfterScan = TimeSpan.FromSeconds(30);
 
-    private readonly IScannerBackend _backend;
+    private readonly IScannerBackend _scannerBackend;
     private readonly OriginRegistry _origins;
     private readonly TimeProvider _time;
     private readonly TimeSpan _retention;
@@ -56,7 +56,7 @@ public sealed class ScanJobManager : IDisposable
     private readonly ProvenanceStamping _provenance;
 
     public ScanJobManager(
-        IScannerBackend backend,
+        IScannerBackend scannerBackend,
         OriginRegistry origins,
         TimeProvider? time = null,
         TimeSpan? retention = null,
@@ -68,7 +68,7 @@ public sealed class ScanJobManager : IDisposable
     {
         _barcodeWorker = barcodeWorker ?? new BarcodeWorker();
         _logger = logger ?? NullLogger<ScanJobManager>.Instance;
-        _backend = backend;
+        _scannerBackend = scannerBackend;
         _origins = origins;
         _time = time ?? TimeProvider.System;
         _retention = retention ?? DefaultRetention;
@@ -242,10 +242,10 @@ public sealed class ScanJobManager : IDisposable
             // someone loads paper or cancels. A flatbed does not wait.
             job.UsedFeeder = job.Options.Source == PaperSource.Flatbed
                 ? false
-                : await _backend.WaitForFeederAsync(job.Options, ct).ConfigureAwait(false);
+                : await _scannerBackend.WaitForFeederAsync(job.Options, ct).ConfigureAwait(false);
 
             var received = new List<ReceivedPage>();
-            var pages = await _backend.ScanAsync(job.Options, page => OnPage(job, page, received), ct).WaitAsync(_scanTimeout, _time, ct).ConfigureAwait(false);
+            var pages = await _scannerBackend.ScanAsync(job.Options, page => OnPage(job, page, received), ct).WaitAsync(_scanTimeout, _time, ct).ConfigureAwait(false);
             if (pages.Count == 0)
             {
                 Complete(job, ScanJobStatus.Failed, "no_pages", "The scanner returned no pages. Is there paper in the feeder?");
@@ -337,7 +337,7 @@ public sealed class ScanJobManager : IDisposable
     {
         try
         {
-            var scanners = await _backend.ListScannersAsync(ct).ConfigureAwait(false);
+            var scanners = await _scannerBackend.ListScannersAsync(ct).ConfigureAwait(false);
             var match = scanners.FirstOrDefault(s => scannerId is null ? s.IsDefault : s.Id == scannerId);
             if (match is not null)
             {

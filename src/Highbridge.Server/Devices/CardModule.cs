@@ -68,7 +68,7 @@ public sealed class CardModule : IDeviceModule
             try
             {
                 var request = await RequestBody.ReadAsync(ctx.Request, ctx.RequestAborted).ConfigureAwait(false);
-                options = await DeviceOptions.ResolveCardAsync(runtime.Settings, runtime.CardReader, request, ctx.RequestAborted).ConfigureAwait(false);
+                options = await DeviceOptions.ResolveCardAsync(runtime.Settings, runtime.CardReaderBackend, request, ctx.RequestAborted).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is JsonException or InvalidOperationException or BadHttpRequestException)
             {
@@ -109,5 +109,36 @@ public sealed class CardModule : IDeviceModule
                 ? Results.NoContent()
                 : Hub.Error(StatusCodes.Status404NotFound, "not_found", "No such card read.");
         });
+    }
+}
+
+public sealed record CardReadersResponse(IReadOnlyList<CardReaderInfo> Readers);
+
+public sealed record CardReadJobResponse(
+    string Id,
+    CardReadStatus Status,
+    CardReadTrigger Trigger,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? FinishedAt,
+    ErrorResponse? Error,
+    CardReaderRef? Reader,
+    CardInterface? Interface,
+    IReadOnlyList<CardApplication>? Applications,
+    CardSelection? Selected)
+{
+    public static CardReadJobResponse From(CardReadJob job)
+    {
+        var result = job.Result;
+        return new CardReadJobResponse(
+            job.Id,
+            job.Status,
+            job.Trigger,
+            job.CreatedAt,
+            job.FinishedAt,
+            job.ErrorCode is null ? null : new ErrorResponse(job.ErrorCode, job.ErrorMessage ?? job.ErrorCode),
+            result?.Reader,
+            result?.Interface,
+            result?.Applications,
+            result?.Selected);
     }
 }

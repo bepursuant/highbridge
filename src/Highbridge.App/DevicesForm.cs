@@ -284,7 +284,7 @@ internal sealed class DevicesForm : Form
 
         string when = snapshot.At.ToLocalTime().ToString("t", CultureInfo.CurrentCulture);
         string policy = snapshot.CardReaderEnabled ? "card reading on" : "card reading off by policy";
-        string summary = $"highbridge {snapshot.Version}  ·  127.0.0.1:{snapshot.Port}  ·  {snapshot.ScannerBackend}, {snapshot.ReaderBackend}  ·  {policy}";
+        string summary = $"highbridge {snapshot.Version}  ·  127.0.0.1:{snapshot.Port}  ·  {snapshot.ScannerBackend}, {snapshot.CardReaderBackend}  ·  {policy}";
         string line = $"Listed at {when}. {counts}. Select a device to edit the defaults a page inherits.";
         return errors.Count == 0 ? summary + Environment.NewLine + line : summary + Environment.NewLine + line + " " + string.Join(" ", errors);
     }

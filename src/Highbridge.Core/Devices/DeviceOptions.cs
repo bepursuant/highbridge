@@ -17,7 +17,7 @@ public static class DeviceOptions
 
     public static async Task<ScanOptions> ResolveScanAsync(
         SettingsStore settings,
-        IScannerBackend backend,
+        IScannerBackend scannerBackend,
         JsonElement request,
         CancellationToken cancellationToken)
     {
@@ -27,7 +27,7 @@ public static class DeviceOptions
         {
             try
             {
-                var scanners = await backend.ListScannersAsync(cancellationToken).ConfigureAwait(false);
+                var scanners = await scannerBackend.ListScannersAsync(cancellationToken).ConfigureAwait(false);
                 deviceId = scanners.FirstOrDefault(s => s.IsDefault)?.Id ?? scanners.FirstOrDefault()?.Id;
             }
             catch (ScannerException)
@@ -47,7 +47,7 @@ public static class DeviceOptions
 
     public static async Task<CardReadOptions> ResolveCardAsync(
         SettingsStore settings,
-        ICardReaderBackend backend,
+        ICardReaderBackend cardReaderBackend,
         JsonElement request,
         CancellationToken cancellationToken)
     {
@@ -57,7 +57,7 @@ public static class DeviceOptions
         {
             try
             {
-                var readers = await backend.ListReadersAsync(cancellationToken).ConfigureAwait(false);
+                var readers = await cardReaderBackend.ListReadersAsync(cancellationToken).ConfigureAwait(false);
                 deviceId = readers.FirstOrDefault()?.Id;
             }
             catch (CardReaderException)

@@ -110,10 +110,10 @@ public static class HighbridgeServer
                 "highbridge",
                 AppVersion,
                 ApiVersion,
-                runtime.Backend.Name,
+                runtime.ScannerBackend.Name,
                 [
-                    new DeviceStatus("scanner", runtime.Backend.Name),
-                    new DeviceStatus("cardReader", runtime.CardReader.Name),
+                    new DeviceStatus("scanner", runtime.ScannerBackend.Name),
+                    new DeviceStatus("cardReader", runtime.CardReaderBackend.Name),
                 ],
                 runtime.Origins.IsPaired(origin),
                 runtime.Origins.AllowPairing));

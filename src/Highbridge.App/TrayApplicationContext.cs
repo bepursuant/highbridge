@@ -42,10 +42,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _loggerFactory = LoggerFactory.Create(b => b.AddProvider(_logProvider).SetMinimumLevel(LogLevel.Information));
         _logger = _loggerFactory.CreateLogger("highbridge");
 
-        IScannerBackend backend = options.UseMockScanner
+        IScannerBackend scannerBackend = options.UseMockScanner
             ? new MockScannerBackend()
             : new TwainScannerBackend(_loggerFactory.CreateLogger<TwainScannerBackend>());
-        ICardReaderBackend cardReader = options.UseMockScanner
+        ICardReaderBackend cardReaderBackend = options.UseMockScanner
             ? new MockCardReaderBackend()
             : new PcscCardReaderBackend(_loggerFactory.CreateLogger<PcscCardReaderBackend>());
         if (!options.UseMockScanner)
@@ -54,8 +54,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
 
         _runtime = new HighbridgeRuntime(
-            backend,
-            cardReader,
+            scannerBackend,
+            cardReaderBackend,
             new DialogConsentService(_ui),
             new SettingsStore(HighbridgePaths.UserSettingsFile),
             HighbridgePolicy.Load(HighbridgePaths.MachinePolicyFile),
@@ -122,8 +122,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
             }
 
             _runtime.Dispose();
-            (_runtime.Backend as IDisposable)?.Dispose();
-            (_runtime.CardReader as IDisposable)?.Dispose();
+            (_runtime.ScannerBackend as IDisposable)?.Dispose();
+            (_runtime.CardReaderBackend as IDisposable)?.Dispose();
             _loggerFactory.Dispose();
         }
 
@@ -255,8 +255,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
             Environment.OSVersion.VersionString,
             RuntimeInformation.FrameworkDescription,
             _runtime.Port,
-            _runtime.Backend.Name,
-            _runtime.CardReader.Name,
+            _runtime.ScannerBackend.Name,
+            _runtime.CardReaderBackend.Name,
             _runtime.Policy.CardReaderEnabled ? "enabled" : "disabled",
             _logProvider.FilePath);
         _ = ListReadersAtStartup();
@@ -278,8 +278,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private async Task<SupportSnapshot> ListDevicesAsync(string title, bool listScanners = true)
     {
         var snapshot = await DeviceInventory.CollectAsync(
-            _runtime.Backend,
-            _runtime.CardReader,
+            _runtime.ScannerBackend,
+            _runtime.CardReaderBackend,
             HighbridgeServer.AppVersion,
             _runtime.Port,
             _runtime.Policy.CardReaderEnabled,

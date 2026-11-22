@@ -56,7 +56,7 @@ public class ScanJobManagerTests
     public async Task Protocol_scan_starts_the_scanner_only_after_its_origin_claims_it()
     {
         var backend = new CountingBackend(TestRuntime.FastMock());
-        using var runtime = TestRuntime.Create(backend: backend);
+        using var runtime = TestRuntime.Create(scannerBackend: backend);
         runtime.Origins.Pair(Origin);
         runtime.Origins.Pair("https://other.example");
 
@@ -177,7 +177,7 @@ public class ScanJobManagerTests
     public async Task Delete_cancels_a_scan_that_has_not_started()
     {
         var backend = new CountingBackend(TestRuntime.FastMock());
-        using var runtime = TestRuntime.Create(backend: backend);
+        using var runtime = TestRuntime.Create(scannerBackend: backend);
         runtime.Origins.Pair(Origin);
 
         var job = runtime.Jobs.Start(Origin, new ScanOptions(), ScanTrigger.ProtocolUrl, ScanJobManager.NewId());
@@ -213,7 +213,7 @@ public class ScanJobManagerTests
     public async Task One_sheet_takes_the_front_and_back_and_leaves_the_rest_of_the_feeder()
     {
         var mock = new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.Zero, FeederSheets = 2 });
-        using var runtime = TestRuntime.Create(backend: mock);
+        using var runtime = TestRuntime.Create(scannerBackend: mock);
         runtime.Origins.Pair(Origin);
 
         var whole = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true }, ScanTrigger.Api);
@@ -246,7 +246,7 @@ public class ScanJobManagerTests
     public async Task An_empty_feeder_waits_instead_of_failing_a_one_sheet_scan()
     {
         var mock = new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.Zero, FeederSheets = 0 });
-        using var runtime = TestRuntime.Create(backend: mock);
+        using var runtime = TestRuntime.Create(scannerBackend: mock);
         runtime.Origins.Pair(Origin);
 
         var job = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, MaxSheets = 1 }, ScanTrigger.Api);
@@ -263,7 +263,7 @@ public class ScanJobManagerTests
     public async Task Cancelling_a_one_sheet_wait_ends_the_job()
     {
         var mock = new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.Zero, FeederSheets = 0 });
-        using var runtime = TestRuntime.Create(backend: mock);
+        using var runtime = TestRuntime.Create(scannerBackend: mock);
         runtime.Origins.Pair(Origin);
 
         var job = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, MaxSheets = 1 }, ScanTrigger.Api);
@@ -279,7 +279,7 @@ public class ScanJobManagerTests
     public async Task A_flatbed_one_sheet_scan_is_one_page_and_does_not_wait()
     {
         var mock = new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.Zero, FeederSheets = 0 });
-        using var runtime = TestRuntime.Create(backend: mock);
+        using var runtime = TestRuntime.Create(scannerBackend: mock);
         runtime.Origins.Pair(Origin);
 
         var job = runtime.Jobs.Start(
@@ -297,7 +297,7 @@ public class ScanJobManagerTests
     public async Task Scans_run_one_at_a_time()
     {
         var backend = new ConcurrencyProbe();
-        using var runtime = TestRuntime.Create(backend: backend);
+        using var runtime = TestRuntime.Create(scannerBackend: backend);
         runtime.Origins.Pair(Origin);
 
         var jobs = Enumerable.Range(0, 4).Select(_ => runtime.Jobs.Start(Origin, new ScanOptions(), ScanTrigger.Api)).ToArray();
