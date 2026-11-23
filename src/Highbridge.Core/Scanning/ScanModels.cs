@@ -87,8 +87,8 @@ public sealed record ScanOptions
     public int MaxSheets { get; set; }
 
     /// <summary>
-    /// Clockwise turn applied to each page before stacking, stamping, or barcode search.
-    /// 0, 90, 180, or 270.
+    /// Which way the sheet is turned in the scanner, clockwise from upright: 0, 90, 180, or 270.
+    /// The scanner is asked to deliver the page upright. highbridge does not rotate the image.
     /// </summary>
     public int Orientation { get; set; }
 

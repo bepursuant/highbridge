@@ -40,6 +40,7 @@ internal sealed class CapabilityNegotiator(DataSource source, TwainSession sessi
         }
 
         ApplyPixelType(caps, options.ColorMode);
+        ApplyOrientation(caps, options.Orientation);
         ApplyResolution(caps, options.Dpi);
         bool countsSheets = FeederXferCount.CountsSheets(source.Manufacturer, source.ProductFamily, source.Name);
         ApplyPaperSource(caps, options, countsSheets);
@@ -67,9 +68,10 @@ internal sealed class CapabilityNegotiator(DataSource source, TwainSession sessi
 
         bool zeroIsBlack = (caps.ICapPixelFlavor.IsSupported ? Current(caps.ICapPixelFlavor) : null) != PixelFlavor.Vanilla;
         logger.LogInformation(
-            "Settings in effect: transfer {Mechanism}, pixel type {PixelType}, resolution {XRes} x {YRes}, units {Units}, feeder {Feeder}, duplex {Duplex}, pixel flavor {Flavor}",
+            "Settings in effect: transfer {Mechanism}, pixel type {PixelType}, orientation {Orientation}, resolution {XRes} x {YRes}, units {Units}, feeder {Feeder}, duplex {Duplex}, pixel flavor {Flavor}",
             mechanism,
             Describe(caps.ICapPixelType),
+            Describe(caps.ICapOrientation),
             Describe(caps.ICapXResolution),
             Describe(caps.ICapYResolution),
             Describe(caps.ICapUnits),
@@ -111,6 +113,23 @@ internal sealed class CapabilityNegotiator(DataSource source, TwainSession sessi
         {
             TrySet(caps.ICapBitDepth, CapabilityId.ICapBitDepth, 1, new TWOneValue { Item = 1, ItemType = ItemType.UInt16 });
         }
+    }
+
+    /// <summary>
+    /// ICAP_ORIENTATION tells the source which edge of the sheet is the top.
+    /// 0, 90, 180, and 270 are clockwise turns from upright (TWOR_ROT0/90/180/270).
+    /// A source that rejects it keeps its own orientation; highbridge does not rotate the pixels.
+    /// </summary>
+    private void ApplyOrientation(ICapabilities caps, int degrees)
+    {
+        var orientation = degrees switch
+        {
+            90 => OrientationType.Rot90,
+            180 => OrientationType.Rot180,
+            270 => OrientationType.Rot270,
+            _ => OrientationType.Rot0,
+        };
+        TrySet(caps.ICapOrientation, CapabilityId.ICapOrientation, orientation, UInt16(orientation));
     }
 
     private void ApplyResolution(ICapabilities caps, int dpi)

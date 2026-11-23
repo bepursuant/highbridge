@@ -3,7 +3,8 @@ using Highbridge.Imaging;
 namespace Highbridge.Scanning;
 
 /// <summary>
-/// Turns scanner pages into documents: rotate each page, then stack each group into one PNG.
+/// Turns scanner pages into documents. The scanner has already oriented each page.
+/// Pages are stacked into one PNG per document.
 /// </summary>
 public static class ScanDocuments
 {
@@ -14,81 +15,21 @@ public static class ScanDocuments
             return [];
         }
 
-        var rotated = new List<ScannedPage>(pages.Count);
-        foreach (var page in pages)
-        {
-            rotated.Add(Rotate(page, options.Orientation));
-        }
-
-        int size = options.MaxPagesPerDocument <= 0 ? rotated.Count : options.MaxPagesPerDocument;
+        int size = options.MaxPagesPerDocument <= 0 ? pages.Count : options.MaxPagesPerDocument;
         var documents = new List<ScannedDocument>();
-        for (int start = 0; start < rotated.Count; start += size)
+        for (int start = 0; start < pages.Count; start += size)
         {
-            int count = Math.Min(size, rotated.Count - start);
-            var group = rotated.GetRange(start, count);
+            int count = Math.Min(size, pages.Count - start);
+            var group = new List<ScannedPage>(count);
+            for (int i = 0; i < count; i++)
+            {
+                group.Add(pages[start + i]);
+            }
+
             documents.Add(Stack(group, documents.Count));
         }
 
         return documents;
-    }
-
-    public static ScannedPage Rotate(ScannedPage page, int degrees)
-    {
-        degrees = ((degrees % 360) + 360) % 360;
-        if (degrees == 0)
-        {
-            return page;
-        }
-
-        var image = PngDecoder.Decode(page.Data);
-        int channels = image.Channels;
-        int width = image.Width;
-        int height = image.Height;
-        bool swap = degrees is 90 or 270;
-        int destWidth = swap ? height : width;
-        int destHeight = swap ? width : height;
-        var source = new byte[height][];
-        for (int y = 0; y < height; y++)
-        {
-            var row = new byte[width * channels];
-            image.ReadRow(y, row);
-            source[y] = row;
-        }
-
-        var pixels = new byte[destWidth * destHeight * channels];
-        for (int y = 0; y < height; y++)
-        {
-            for (int x = 0; x < width; x++)
-            {
-                int nx, ny;
-                switch (degrees)
-                {
-                    case 90:
-                        nx = height - 1 - y;
-                        ny = x;
-                        break;
-                    case 180:
-                        nx = width - 1 - x;
-                        ny = height - 1 - y;
-                        break;
-                    default:
-                        nx = y;
-                        ny = width - 1 - x;
-                        break;
-                }
-
-                int from = x * channels;
-                int to = ((ny * destWidth) + nx) * channels;
-                for (int channel = 0; channel < channels; channel++)
-                {
-                    pixels[to + channel] = source[y][from + channel];
-                }
-            }
-        }
-
-        var format = channels == 1 ? PngPixelFormat.Gray8 : PngPixelFormat.Rgb24;
-        byte[] png = PngEncoder.Encode(destWidth, destHeight, format, pixels, image.Dpi);
-        return new ScannedPage(page.Index, page.MediaType, destWidth, destHeight, png) { ScannerName = page.ScannerName };
     }
 
     public static ScannedDocument Stack(IReadOnlyList<ScannedPage> pages, int index)

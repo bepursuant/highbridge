@@ -197,8 +197,8 @@ public sealed class ScanJobManager : IDisposable
     /// <summary>Runs on the backend's thread (the TWAIN thread for real scanners), so it only copies.</summary>
     private static void OnPage(ScanJob job, ScannedPage page, List<ReceivedPage> received)
     {
-        // Copy now. A backend may reuse or overwrite the buffer after the callback returns,
-        // and rotation, stacking, and the stamp all happen after the scan.
+        // Copy now. A backend may reuse or overwrite the buffer after the callback returns.
+        // Stacking and the stamp happen after the scan. The scanner orients the page.
         var copy = new ScannedPage(page.Index, page.MediaType, page.Width, page.Height, page.Data.ToArray())
         {
             ScannerName = page.ScannerName,
