@@ -257,6 +257,22 @@ public class ScanJobManagerTests
     }
 
     [Fact]
+    public async Task An_empty_WIA_feeder_waits_and_then_scans()
+    {
+        var backend = new EmptyThenPageBackend();
+        using var runtime = TestRuntime.Create(scannerBackend: backend);
+        runtime.Origins.Pair(Origin);
+
+        var job = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder }, ScanTrigger.Api);
+        await job.Finished.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(ScanJobStatus.Completed, job.Status);
+        Assert.True(job.UsedFeeder);
+        Assert.Equal(2, backend.Scans);
+        Assert.Equal(1, Assert.Single(job.Documents).PageCount);
+    }
+
+    [Fact]
     public async Task Cancelling_a_one_sheet_wait_ends_the_job()
     {
         var mock = new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.Zero, FeederSheets = 0 });
@@ -334,6 +350,29 @@ public class ScanJobManagerTests
 
         Assert.Equal(ScanJobStatus.Scanning, job.Status);
         Assert.False(job.IsFinished);
+    }
+
+    private sealed class EmptyThenPageBackend : IScannerBackend
+    {
+        public int Scans { get; private set; }
+
+        public string Name => "wia-empty";
+
+        public Task<IReadOnlyList<ScannerInfo>> ListScannersAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<ScannerInfo>>([]);
+
+        public Task<IReadOnlyList<ScannedPage>> ScanAsync(ScanOptions options, Action<ScannedPage>? onPage, CancellationToken cancellationToken)
+        {
+            Scans++;
+            if (Scans == 1)
+            {
+                throw new ScannerException(WiaFeeder.EmptyFeederCode, "There is no paper in the feeder yet.");
+            }
+
+            var page = new ScannedPage(0, "image/png", 1, 1, PngEncoder.Encode(1, 1, PngPixelFormat.Gray8, [255]));
+            onPage?.Invoke(page);
+            return Task.FromResult<IReadOnlyList<ScannedPage>>([page]);
+        }
     }
 
     private sealed class HangingBackend : IScannerBackend

@@ -48,3 +48,45 @@ public class FeederXferCountTests
         Assert.Null(FeederXferCount.Value(new ScanOptions { Source = PaperSource.Flatbed, MaxSheets = 2 }, countsSheets: false));
     }
 }
+
+public class WiaFeederTests
+{
+    [Theory]
+    [InlineData("Samsung", "WIA-TigerType", "WIA-SCX-4600 Series")]
+    [InlineData("Samsung", "TigerType", "SCX-4600 Series")]
+    [InlineData(null, null, "WIA-Samsung C460")]
+    [InlineData("Microsoft", "wiatwain.ds", "WIA device")]
+    public void Wia_TigerType_scans_one_sheet_at_a_time(string? manufacturer, string? family, string? name)
+    {
+        Assert.True(WiaFeeder.ScanOneSheetAtATime(manufacturer, family, name));
+    }
+
+    [Theory]
+    [InlineData("PFU Limited", "PaperStream IP", "PaperStream IP fi-8170")]
+    [InlineData("Ricoh", "PaperStream IP", "RICOH fi-8270")]
+    [InlineData("Ambir Technology", "nScan", "nScan 690gt")]
+    [InlineData(null, null, "WIA-Ambir nScan 690gt")]
+    [InlineData("Ambir", "nScan 690gt", "Ambir nScan 690gt")]
+    public void Ricoh_and_Ambir_keep_their_own_transfer_count(string? manufacturer, string? family, string? name)
+    {
+        Assert.False(WiaFeeder.ScanOneSheetAtATime(manufacturer, family, name));
+    }
+
+    [Fact]
+    public void An_empty_first_enable_waits_and_a_later_empty_enable_finishes_the_pages_already_scanned()
+    {
+        Assert.Equal(WiaFeeder.SheetStep.WaitForPaper, WiaFeeder.AfterEnable(0, 0, 0, 0, feederStillLoaded: true));
+        Assert.Equal(WiaFeeder.SheetStep.FeederEmptied, WiaFeeder.AfterEnable(2, 2, 2, 0, feederStillLoaded: true));
+    }
+
+    [Fact]
+    public void One_sheet_continues_while_paper_remains_and_stops_at_maxSheets_or_an_empty_feeder()
+    {
+        Assert.Equal(WiaFeeder.SheetStep.NextSheet, WiaFeeder.AfterEnable(0, 1, 0, 0, feederStillLoaded: true));
+        Assert.Equal(WiaFeeder.SheetStep.NextSheet, WiaFeeder.AfterEnable(1, 3, 1, 0, feederStillLoaded: true));
+        Assert.Equal(WiaFeeder.SheetStep.Finished, WiaFeeder.AfterEnable(0, 2, 0, 1, feederStillLoaded: true));
+        Assert.Equal(WiaFeeder.SheetStep.Finished, WiaFeeder.AfterEnable(0, 1, 0, 0, feederStillLoaded: false));
+        Assert.Equal(WiaFeeder.SheetStep.NextSheet, WiaFeeder.AfterEnable(0, 2, 0, 3, feederStillLoaded: true));
+        Assert.Equal(WiaFeeder.SheetStep.Finished, WiaFeeder.AfterEnable(2, 4, 1, 2, feederStillLoaded: true));
+    }
+}

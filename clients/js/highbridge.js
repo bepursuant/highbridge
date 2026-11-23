@@ -250,9 +250,11 @@ export class HighbridgeClient {
 
   /**
    * Arms a scan session: the same POST and status poll as {@link scan}, repeated until Stop,
-   * a flatbed (always one shot), or an error that needs a person. With `maxSheets` above zero
-   * on a feeder, each cycle stops after that many sheets and an empty feeder keeps the session
-   * armed. Options are read again each cycle when `options` is a function. `pollIntervalMs` is unchanged.
+   * a flatbed (always one shot), or an error that needs a person. A feeder request waits while
+   * the feeder is empty, including when `maxSheets` is 0. With `maxSheets` above zero, each
+   * cycle stops after that many sheets and the session scans the next batch. `maxSheets` 0 is
+   * one scan of the whole feeder, once paper is loaded. Options are read again each cycle when
+   * `options` is a function. `pollIntervalMs` is unchanged.
    * @param {object|(() => object)} options
    * @param {object} [hooks]
    * @param {(result: object) => void} [hooks.onResult]
@@ -263,7 +265,7 @@ export class HighbridgeClient {
     for (;;) {
       if (signal?.aborted) return;
       const current = currentOptions(options);
-      const loop = Number(current.maxSheets) > 0 && current.source !== 'flatbed';
+      const limitedFeeder = Number(current.maxSheets) > 0 && current.source !== 'flatbed';
       let jobId;
       try {
         const result = await this.scan(current, {
@@ -274,15 +276,20 @@ export class HighbridgeClient {
           },
         });
         onResult?.(result);
-        if (!loop || result.usedFeeder === false) return;
+        // maxSheets 0 already took every sheet that was loaded. A positive maxSheets
+        // scans another batch while the feeder was used.
+        if (!limitedFeeder || result.usedFeeder === false) return;
       } catch (err) {
         if (signal?.aborted || err?.code === 'aborted' || err?.code === 'canceled') {
           if (jobId) this._json('DELETE', `/scanner/${jobId}`).catch(() => {});
           return;
         }
-        // The server waits on CAP_FEEDERLOADED. If a driver still reports an empty feeder,
-        // that does not end the session.
-        if (loop && FEEDER_RETRY.has(err?.code)) {
+        // An empty feeder waits, including when maxSheets is 0. A flatbed, or a job that
+        // did not use the feeder, is a real failure.
+        const waitingForPaper = current.source !== 'flatbed'
+          && err?.details?.usedFeeder !== false
+          && FEEDER_RETRY.has(err?.code);
+        if (waitingForPaper) {
           if (jobId) await this._json('DELETE', `/scanner/${jobId}`).catch(() => {});
           await sleep(this.pollIntervalMs);
           continue;

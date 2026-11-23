@@ -96,12 +96,14 @@ class FakeApp {
   }
 
   addJob(id, options, outcome = 'completed', errorCode = 'paper_jam') {
+    let usedFeeder = options.usedFeeder;
     if (this.scanScript?.length) {
       const scripted = this.scanScript.shift();
       outcome = scripted.outcome ?? outcome;
       errorCode = scripted.errorCode ?? errorCode;
+      if (typeof scripted.usedFeeder === 'boolean') usedFeeder = scripted.usedFeeder;
     }
-    const job = { id, options, polls: 0, status: 'queued', outcome, errorCode, usedFeeder: options.usedFeeder };
+    const job = { id, options, polls: 0, status: 'queued', outcome, errorCode, usedFeeder };
     this.jobs.set(id, job);
     return this.view(job);
   }
@@ -392,6 +394,35 @@ test('scanSession keeps going when the feeder is empty and stops on a jam', asyn
     (err) => err instanceof HighbridgeError && err.code === 'paper_jam',
   );
   assert.equal(jammed.calls.filter((call) => call === 'POST /scanner').length, 1);
+});
+
+test('an empty feeder waits when maxSheets is 0, then one scan takes the whole feeder', async () => {
+  const app = new FakeApp({ paired: true });
+  app.scanScript = [
+    { outcome: 'failed', errorCode: 'no_pages', usedFeeder: true },
+    { outcome: 'failed', errorCode: 'feeder_empty', usedFeeder: true },
+  ];
+  let passes = 0;
+  const controller = new AbortController();
+  await client(app).scanSession({ maxSheets: 0, source: 'feeder' }, {
+    signal: controller.signal,
+    onResult: () => {
+      passes += 1;
+      controller.abort();
+    },
+  });
+  assert.equal(passes, 1);
+  assert.equal(app.calls.filter((call) => call === 'POST /scanner').length, 3);
+  assert.ok(app.deleted.includes('job123456789abcdef'));
+  assert.ok(app.deleted.includes('job223456789abcdef'));
+
+  const flat = new FakeApp({ paired: true });
+  flat.scanScript = [{ outcome: 'failed', errorCode: 'no_pages', usedFeeder: false }];
+  await assert.rejects(
+    client(flat).scanSession({ source: 'flatbed' }),
+    (err) => err instanceof HighbridgeError && err.code === 'no_pages',
+  );
+  assert.equal(flat.calls.filter((call) => call === 'POST /scanner').length, 1);
 });
 
 test('a one-sheet scan that did not use the feeder is not repeated', async () => {

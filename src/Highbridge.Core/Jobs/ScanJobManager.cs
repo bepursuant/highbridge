@@ -42,6 +42,11 @@ public sealed class ScanJobManager : IDisposable
     /// </summary>
     public static readonly TimeSpan BarcodeWaitAfterScan = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// Pause between WIA feeder probes. The wait itself is not part of the scan timeout.
+    /// </summary>
+    internal static readonly TimeSpan FeederRetryDelay = TimeSpan.FromMilliseconds(400);
+
     private readonly IScannerBackend _scannerBackend;
     private readonly OriginRegistry _origins;
     private readonly TimeProvider _time;
@@ -244,13 +249,30 @@ public sealed class ScanJobManager : IDisposable
         {
             job.SetStatus(ScanJobStatus.Scanning);
             // The empty-feeder wait is not part of the scan timeout: the job stays armed until
-            // someone loads paper or cancels. A flatbed does not wait.
-            job.UsedFeeder = job.Options.Source == PaperSource.Flatbed
-                ? false
-                : await _scannerBackend.WaitForFeederAsync(job.Options, ct).ConfigureAwait(false);
-
+            // someone loads paper or cancels. A flatbed does not wait. WIA-TWAIN often cannot
+            // answer CAP_FEEDERLOADED, so an enable that returns nothing is the same wait.
             var received = new List<ReceivedPage>();
-            var pages = await _scannerBackend.ScanAsync(job.Options, page => OnPage(job, page, received), ct).WaitAsync(_scanTimeout, _time, ct).ConfigureAwait(false);
+            IReadOnlyList<ScannedPage> pages;
+            while (true)
+            {
+                job.UsedFeeder = job.Options.Source == PaperSource.Flatbed
+                    ? false
+                    : await _scannerBackend.WaitForFeederAsync(job.Options, ct).ConfigureAwait(false);
+
+                try
+                {
+                    received.Clear();
+                    pages = await _scannerBackend.ScanAsync(job.Options, page => OnPage(job, page, received), ct).WaitAsync(_scanTimeout, _time, ct).ConfigureAwait(false);
+                    break;
+                }
+                catch (ScannerException ex) when (ex.Code == WiaFeeder.EmptyFeederCode)
+                {
+                    received.Clear();
+                    _logger.LogInformation("Scan {JobId} found an empty feeder; waiting for a sheet", job.Id);
+                    await Task.Delay(FeederRetryDelay, ct).ConfigureAwait(false);
+                }
+            }
+
             if (pages.Count == 0)
             {
                 Complete(job, ScanJobStatus.Failed, "no_pages", "The scanner returned no pages. Is there paper in the feeder?");

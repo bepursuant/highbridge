@@ -46,7 +46,11 @@ internal sealed class CapabilityNegotiator(DataSource source, TwainSession sessi
         ApplyPaperSource(caps, options, countsSheets);
         ApplyDuplex(caps, options.Duplex);
 
-        if (FeederXferCount.Value(options, countsSheets) is int xferCount)
+        // WIA-TWAIN does not take this value. TwainScan asks LimitToOneSheet for one sheet
+        // per enable instead. An unset count (maxSheets 0) on that layer feeds two sheets
+        // and then never returns.
+        if (!WiaFeeder.ScanOneSheetAtATime(source.Manufacturer, source.ProductFamily, source.Name)
+            && FeederXferCount.Value(options, countsSheets) is int xferCount)
         {
             if (countsSheets && options.ImageLimit() is int images && xferCount != images)
             {
@@ -217,6 +221,40 @@ internal sealed class CapabilityNegotiator(DataSource source, TwainSession sessi
                 logger.LogInformation("Paper source: the source's default (feeder enabled: {Feeder})", hasFeeder ? Describe(feeder) : "no feeder control");
                 break;
         }
+    }
+
+    /// <summary>
+    /// One sheet for the next enable: CAP_XFERCOUNT is the image count for that sheet
+    /// (two when duplex is actually on), and CAP_AUTOFEED stays off so the feeder does not
+    /// pick the sheet after it. Returns how many images this enable may deliver.
+    /// </summary>
+    internal int LimitToOneSheet(ScanOptions options)
+    {
+        var caps = source.Capabilities;
+        bool duplex = options.Duplex
+            && caps.CapDuplexEnabled.IsSupported
+            && Current(caps.CapDuplexEnabled) == BoolType.True;
+        int images = duplex ? 2 : 1;
+        TrySet(caps.CapXferCount, CapabilityId.CapXferCount, images, new TWOneValue { Item = (uint)images, ItemType = ItemType.Int16 });
+        if (caps.CapAutoFeed.IsSupported)
+        {
+            TrySet(caps.CapAutoFeed, CapabilityId.CapAutoFeed, BoolType.False, Bool(false));
+        }
+
+        logger.LogInformation("WIA feeder: this enable asks for {Images} image(s), one sheet, with autofeed off", images);
+        return images;
+    }
+
+    /// <summary>True when this scan is using the document feeder, after negotiation.</summary>
+    internal bool FeederIsActive(ScanOptions options)
+    {
+        if (options.Source == PaperSource.Flatbed)
+        {
+            return false;
+        }
+
+        var feeder = source.Capabilities.CapFeederEnabled;
+        return feeder.IsSupported && Current(feeder) == BoolType.True;
     }
 
     /// <summary>

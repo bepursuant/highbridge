@@ -40,8 +40,10 @@ export interface ScanOptions {
    */
   maxPagesPerDocument?: number;
   /**
-   * 0 means no limit. A positive value stops the feeder after that many sheets. Duplex still
-   * returns both sides. A flatbed stays one shot. `scanSession` repeats while this is above zero.
+   * 0 means no limit: one scan takes the whole feeder once paper is loaded. A positive value
+   * stops the feeder after that many sheets. Duplex still returns both sides. A flatbed stays
+   * one shot. `scanSession` repeats while this is above zero, and waits out an empty feeder
+   * either way.
    */
   maxSheets?: number;
   /** Clockwise turn given to the scanner before the page is stacked or searched for barcodes. */
