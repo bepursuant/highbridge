@@ -21,8 +21,9 @@ public enum PaperSource
 }
 
 /// <summary>
-/// What the client downloads. Only <see cref="Png"/> (one image per page) exists today. A
-/// document format such as PDF would be a new value here plus a case in <see cref="OutputFormats"/>.
+/// What the client downloads. Only <see cref="Png"/> exists today: one PNG per document, with
+/// that document's pages stacked. A format such as PDF would be a new value here plus a case
+/// in <see cref="OutputFormats"/>.
 /// </summary>
 [JsonConverter(typeof(CamelCaseEnumConverter<OutputFormat>))]
 public enum OutputFormat

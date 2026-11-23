@@ -1,12 +1,13 @@
 # highbridge
 
-highbridge lets a web application scan paper documents on the user's Windows PC. It is a small per-user tray app that:
+highbridge lets a web application interact with peripherals on the user's Windows PC. It is a small per-user tray app that:
 
 - drives TWAIN scanners, through [NTwain](https://github.com/soukoku/ntwain) (MIT);
+- reads payment cards through PC/SC (`winscard`);
 - exposes a local API on `http://127.0.0.1:47116` that only approved HTTPS websites can use;
 - registers the `highbridge://` URL scheme so a page can start the app, a scan, or a card read with a link.
 
-The user approves each website once. After that, the site's scans start immediately, with no highbridge dialogs.
+The user approves each website once. After that, the site's scans and card reads start immediately, with no highbridge dialogs.
 
 ```js
 import { HighbridgeClient } from './highbridge.js';
@@ -18,7 +19,7 @@ scanButton.onclick = async () => {
 };
 ```
 
-Status: **proof of concept** for Windows 10/11 workstations (32-bit build, PNG output). Architecture, security model, browser constraints, dependency licenses and open questions are in [docs/architecture.md](docs/architecture.md).
+Status: **alpha**. It is in testing and ready for production use on Windows 10/11 workstations. The HTTP and JavaScript APIs are mostly stable (32-bit build, PNG documents, PC/SC card reads). Architecture, the security model, browser constraints, dependency licenses, and open questions are in [docs/architecture.md](docs/architecture.md).
 
 ## How it works
 
@@ -32,8 +33,9 @@ Status: **proof of concept** for Windows 10/11 workstations (32-bit build, PNG o
 
 1. **Pairing (once per site).** The first `POST /pair` from a site shows *"Allow this website to use your scanners and card reader?"*. The prompt names both devices and says a card read sends the full card number, the expiry, and the cardholder name to that site over the local connection, and that every scan includes the Windows user and computer name. This is the only highbridge prompt. Approved origins are saved in `%APPDATA%\Highbridge\settings.json` and can be removed in the tray menu's **Approved websites** window. The browser supplies the `Origin` header, so pages cannot fake it. Sites approved under older wording are asked again before the first scan or card read.
 2. **Scanning.** `POST /scanner` from a paired site starts the scan right away. highbridge also asks the driver to hide its progress window (`CAP_INDICATORS`) unless the page asks for the driver UI. The page polls `GET /scanner/{id}` and downloads each document from `/scanner/{id}/documents/{n}`. A document is one PNG of that scan's pages, stacked top to bottom. Results stay in memory only, are visible only to the origin that requested them, and expire after 10 minutes.
-3. **`highbridge://` links** start the app (`highbridge://launch`), queue a scan (`highbridge://scan?…`), or queue a card read (`highbridge://read-card?…`) for an *already paired* origin. The scanner or reader does not start until that origin's page polls the job over HTTP (within 30 seconds), so a forged link cannot run the device. A protocol link never carries data back, and it can never pair a site.
-4. **Browser permission.** Chrome, Edge and Firefox ask the user once to let a public site reach "apps on this device" (Local Network Access, loopback). The client sends `targetAddressSpace: 'loopback'` and should be called from a click.
+3. **Card reads.** `POST /pcsc` from a site with current approval starts the read right away. The page polls `GET /pcsc/{id}`. The card fields are on that job. highbridge chooses the card commands. The number is returned only to that site over the local connection, and it is not written to the log.
+4. **`highbridge://` links** start the app (`highbridge://launch`), queue a scan (`highbridge://scan?…`), or queue a card read (`highbridge://read-card?…`) for an *already paired* origin. The scanner or reader does not start until that origin's page polls the job over HTTP (within 30 seconds), so a forged link cannot run the device. A protocol link never carries data back, and it can never pair a site.
+5. **Browser permission.** Chrome, Edge and Firefox ask the user once to let a public site reach "apps on this device" (Local Network Access, loopback). The client sends `targetAddressSpace: 'loopback'` and should be called from a click.
 
 ### Local API
 
@@ -42,22 +44,61 @@ Status: **proof of concept** for Windows 10/11 workstations (32-bit build, PNG o
 | `GET /status` | `{app, version, apiVersion, backend, devices: [{kind, backend}], paired, pairingAllowed}`. `backend` stays the scanner backend |
 | `POST /pair` | Ask the user to approve this site |
 | `GET /scanner` | List scanners (paired sites only) |
-| `POST /scanner` | Body: `{scannerId?, dpi, colorMode: color\|gray\|blackWhite, source: auto\|flatbed\|feeder, duplex, showDriverUi, maxPagesPerDocument, maxSheets, orientation, format: png, barcodes?, barcodeFormats?}`. A field left out uses the default saved for that scanner. Returns `202` with the job |
+| `POST /scanner` | Start a scan. The body is one options object; see [Scan parameters](#scan-parameters). A field left out uses the default saved for that scanner. Returns `202` with the job |
 | `GET /scanner/{id}` | Job status: `queued`, `scanning`, `completed`, `failed` or `canceled`, plus documents. With `barcodes: true`, each document includes the codes found on it |
 | `GET /scanner/{id}/documents/{n}` | Document image (`image/png`): the pages of that document stacked top to bottom |
 | `DELETE /scanner/{id}` | Discard or cancel a job |
 | `GET /pcsc` | List readers (`{id, name, backend}`). No card-present flag. Current approval required |
-| `POST /pcsc` | Body: `{readerId?, interface: auto\|contact\|contactless, aid?, waitForCardMs?, waitForRemoval?}`. A field left out uses the default saved for that reader. Returns `202` with the job. No APDU fields |
+| `POST /pcsc` | Start a card read. The body is one options object; see [Card-read parameters](#card-read-parameters). A field left out uses the default saved for that reader. Returns `202` with the job. The page cannot send card commands |
 | `GET /pcsc/{id}` | Job status: `queued`, `reading`, `completed`, `failed` or `canceled`. The card fields are inline when completed. Also claims a `highbridge://read-card` job |
 | `DELETE /pcsc/{id}` | Discard or cancel a card read |
 
-`format` is optional and only `png` is accepted for now; the option exists so PDF can be added later without changing the API shape.
+### Scan parameters
 
-`maxSheets` (also `maxSheets` on `highbridge://scan`) stops a feeder after that many sheets. `0` means no limit. With duplex, both sides still come back. An image-counted driver (the Ambir nScan 690gt) is asked for sheets times sides. A sheet-counted driver (PaperStream IP on the Ricoh fi-8170) is asked for that many sheets, not that many images. The job waits while the feeder is empty instead of failing. A flatbed is one shot. `maxPagesPerDocument` closes the current PNG and starts another once that many pages are in it (`0` keeps every page in one file). `orientation` is 0, 90, 180, or 270 clockwise and is given to the scanner as the sheet's orientation. highbridge does not rotate the image.
+`POST /scanner` and `highbridge://scan` take the same fields. A field the page leaves out uses the default saved for that scanner in the tray. The defaults below are what a scanner uses when nothing has been saved.
 
-`scanSession` and `readCardSession` in the JS client arm that from one click. They repeat the existing POST and status poll until Stop or an error that needs a person. A card session does not read again until that card has left the slot (`waitForRemoval` on the later reads). The card number is still only on the completed job. Pairing, claim timeouts, and the one-job locks are unchanged.
+| Field | Default | Meaning |
+|---|---|---|
+| `scannerId` | the scanner marked default | Id from `GET /scanner` |
+| `dpi` | `200` | `50`–`1200` |
+| `colorMode` | `color` | `color`, `gray`, or `blackWhite` |
+| `source` | `auto` | `auto`, `flatbed`, or `feeder` |
+| `duplex` | `false` | When `true`, a feeder returns both sides. The front and the back are two pages |
+| `showDriverUi` | `false` | When `true`, the vendor dialog is shown and highbridge does not force the other settings |
+| `maxPagesPerDocument` | `0` | `0` keeps every page in one PNG. `1`–`500` starts another document after that many pages |
+| `maxSheets` | `0` | `0` does not stop the feeder. `1`–`500` stops it after that many sheets. See below |
+| `orientation` | `0` | `0`, `90`, `180`, or `270`, clockwise. Sent to the scanner as the sheet's orientation. highbridge does not rotate the image |
+| `format` | `png` | Only `png` is accepted. The field is there so a later format does not change the request shape |
+| `barcodes` | `false` | When `true`, each finished document is searched. The codes come back on that document |
+| `barcodeFormats` | the common set | Names such as `"qrCode"` and `"code128"`. Requires `barcodes: true`. On a link, `barcodeFormats=qrCode,code128` |
 
-`barcodes: true` finds barcodes on each finished document (QR, Data Matrix, PDF417, Code 128, Code 39, EAN-13, EAN-8, UPC-A, UPC-E and ITF, unless `barcodeFormats` names a subset, for example `["qrCode", "code128"]`). It is off unless asked. Detection runs on the stacked document in the orientation the scanner delivered, so it does not turn the image again. A wide faded Code 128 is also searched in full-width strips. The job stays `scanning` until detection finishes. Each barcode is `{page, format, text, rotation, orientation, points}`: `page` is the document index, `orientation` is the code's own angle when it can be measured, and `points` are pixels of the document. Each document carries `barcodeStatus`: `done`, `partial` (the time budget ran out), `failed` or `skipped`, and that document's `barcodes`. A `highbridge://scan` link takes the same options as `barcodes=true&barcodeFormats=qrCode,code128`. Provenance is written into the stacked document after that copy is taken. The image itself is unchanged.
+**Feeder counting.** A flatbed is one shot. An empty feeder waits instead of failing the job. Duplex still returns both sides of each sheet. An image-counted driver (the Ambir nScan 690gt) is asked for `maxSheets` times the number of sides. A sheet-counted driver (PaperStream IP on the Ricoh fi-8170) is asked for `maxSheets` sheets, not that many images.
+
+### Barcode results
+
+Detection runs on the stacked document in the orientation the scanner delivered. It does not turn the image again. A wide faded Code 128 is also searched in full-width strips. The job stays `scanning` until detection finishes. The default formats are QR, Data Matrix, PDF417, Code 128, Code 39, EAN-13, EAN-8, UPC-A, UPC-E, and ITF. Aztec, Code 93, and Codabar are available by name.
+
+Each document then has `barcodeStatus` (`done`, `partial` when the time budget ran out, `failed`, or `skipped`) and `barcodes`. A barcode is `{page, format, text, rotation, orientation, points}`: `page` is the document index, `orientation` is the code's own angle when it can be measured, and `points` are pixels of that document. The job itself has no barcode list. Provenance is written after the copy used for detection. The image itself is unchanged.
+
+### Card-read parameters
+
+`POST /pcsc` and `highbridge://read-card` take the same fields. A field the page leaves out uses the default saved for that reader.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `readerId` | the default reader | Id from `GET /pcsc` |
+| `interface` | `auto` | `auto`, `contact`, or `contactless`. See below |
+| `aid` | the highest-priority application that selects | Optional hex, 5–16 bytes (`A0000000041010`) |
+| `waitForCardMs` | `30000` | How long to wait for a card, `0`–`120000` |
+| `waitForRemoval` | `false` | Wait until the slot is empty before looking. A session sets this on the later reads |
+
+`auto` uses whichever slot has a card. `contact` prefers the chip slot and the contact directory (PSE). `contactless` prefers the tap slot and the contactless directory (PPSE). If that directory is missing, the other is tried. Windows shows the two slots of one reader as two readers; a card in either slot is accepted.
+
+The page names the reader, the interface, an optional application, and how long to wait. highbridge chooses every card command. There is no field for an APDU.
+
+### Sessions
+
+`scanSession` and `readCardSession` in the JS client start from one click. They repeat the same POST and status poll until Stop or an error that needs a person. `scanSession` repeats while `maxSheets` is above zero and the scan used the feeder. A card session does not read again until that card has left the slot. The card number is only on the completed job. One scan runs at a time, and one card read runs at a time.
 
 ### Provenance
 
@@ -67,9 +108,11 @@ The record is embedded in the PNG as an `iTXt` chunk named `highbridge:provenanc
 
 Documents are published only once the record is written; until then, `pagesScanned` shows how many scanner pages have arrived.
 
-The record includes the user's Windows name and computer name, so the pairing prompt says so. Sites approved before that wording are asked again before the next scan (`approval_required`), and the JS client handles this automatically. Sites listed in policy are covered by the admin.
+The record includes the user's Windows name and computer name, so the pairing prompt says so. Sites approved before that wording are asked again before the next scan or card read (`approval_required`), and the JS client handles this automatically. Sites listed in policy are covered by the admin.
 
-A completed card read returns `reader`, `interface` (`contact` or `contactless`), `applications` (every directory entry) and `selected` (one application: `aid`, `label`, `preferredName`, `priority`, `pan`, `panLast4`, `expiry`, `cardholderName`). `pan` is the card number from the chip, digits only. Absent optional fields are omitted. highbridge is a program on this PC: the number is returned only to the paired site over `127.0.0.1`, it is not sent to a highbridge server, and it is not written to the log. Tracks, PIN, cryptogram, and raw card bytes are not returned. The copy kept for the response is wiped when the job is deleted or expires (10 minutes).
+### Card-read result
+
+A completed card read returns `reader`, `interface` (`contact` or `contactless`), `applications` (every directory entry), and `selected` (one application: `aid`, `label`, `preferredName`, `priority`, `pan`, `panLast4`, `expiry`, `cardholderName`). `pan` is the card number from the chip, digits only. Absent optional fields are omitted. highbridge is a program on this PC: the number is returned only to the paired site over `127.0.0.1`, it is not sent to a highbridge server, and it is not written to the log. Tracks, PIN, cryptogram, and raw card bytes are not returned. The copy kept for the response is wiped when the job is deleted or expires (10 minutes).
 
 Errors are returned as `{ "error": "<code>", "message": "…" }`. Common codes are `origin_not_paired`, `pairing_denied`, `invalid_options`, `approval_required`, `stamp_failed` (the provenance record could not be written), `paper_jam`, `no_scanners`, `twain_unavailable`, `scan_timeout` (the scanner stopped responding; the message says at which step), `not_claimed` (a `highbridge://` job that no page picked up), `card_reader_disabled`, `no_card`, `no_payment_apps`, `app_not_found`, `read_failed`, `pcsc_unavailable` and `read_timeout`.
 
@@ -116,7 +159,7 @@ dotnet run --project samples/Highbridge.SampleSite     # demo page on http://127
 
 Open http://127.0.0.1:47200, click **Connect**, then **Scan**. The mock scanner offers a duplex feeder, a flatbed, a "jammed" device for testing errors, and **highbridge mock feeder with barcode test sheets**: A4 pages with every supported barcode, turned and skewed. Tick **Find barcodes** and scan that device to see them listed.
 
-The **Card reader** tab lists readers and reads a card with the same options as `readCard`: reader, interface (`auto`, `contact`, or `contactless`), an optional application id, and how long to wait. `auto` uses whichever slot has a card. `contact` prefers the chip slot and the contact directory (PSE); `contactless` prefers the tap slot and the contactless directory (PPSE). If that directory is not on the card, the other is tried. Windows shows the two slots as two readers; a card in either slot of the same reader is accepted. The mock offers a reader with a Visa and a Mastercard (card number `4111111111111234`, expiry `2028-12`, name `DOE/JOHN`; `A0000000041010` selects the Mastercard `5555555555555678`), a reader with no card, and a reader with no payment applications.
+The **Card reader** tab uses the same fields as [Card-read parameters](#card-read-parameters). The mock offers a reader with a Visa and a Mastercard (card number `4111111111111234`, expiry `2028-12`, name `DOE/JOHN`; `A0000000041010` selects the Mastercard `5555555555555678`), a reader with no card, and a reader with no payment applications.
 
 To print those sheets and try them on a real scanner: `dotnet run --project src/Highbridge.DevHost -- --write-barcode-sheets ./sheets` writes three PNGs at 300 dpi. Print each on A4, fit to the page.
 
@@ -274,16 +317,16 @@ Copy `clients/js/highbridge.js` (and `highbridge.d.ts` for TypeScript) into your
 - Call these from a click handler, and serve your site over HTTPS. Browsers deny loopback access to insecure public pages.
 - If your page runs in an iframe, the embedding page must delegate `allow="loopback-network"`.
 
-## Known limitations (POC)
+## Known limitations
 
-- **Barely tested with real scanners.** The MSI and tray app work on Windows; the first real scan (a Samsung all-in-one) hung, which led to the current TWAIN threading. The TWAIN backend is tested under Wine against a fake source (`scripts/test-twain-wine.sh`), not yet against real drivers.
+- **Scanner coverage.** Scans have been run on more than one TWAIN scanner, including a Ricoh fi-8170 with PaperStream IP and an Ambir nScan 690gt. An earlier Samsung all-in-one hung, which is why every TWAIN call stays on one thread. The same backend is also tested under Wine against a fake source (`scripts/test-twain-wine.sh`). A driver can still reject a setting; highbridge logs that and keeps the scanner's own value.
 - **Card reads are covered by the mock reader in CI.** A real contact reader has been read through PC/SC. A tap uses the same read: both slots of a dual reader are watched, PPSE is tried and then PSE, and the Windows call is retried in the shapes contactless drivers accept. Restart the tray app from this build before trying a tap. If Windows still rejects it, the page message includes the PC/SC code.
 - PNG output only (PDF is planned). Large color scans at 600 dpi produce big PNGs, and everything is held in memory.
 - 32-bit only, so only 32-bit TWAIN drivers are visible.
 - Canceling a scan stops at the next page boundary. Scans waiting in the driver's own dialog cannot be aborted from the web page.
 - One instance per Windows session on the fixed port 47116; terminal servers are not supported.
 - Provenance records are not signed or trusted-timestamped yet: the hash shows that the page content matches the record, but anyone could rewrite both. A `highbridge://` scan from a site that still needs re-approval is rejected in the app (logged), so the page times out; the HTTP path asks for re-approval instead.
-- Barcode detection (ZXing.Net) reads 2D codes at any angle and 1D codes turned by 0/90/180/270, plus a modest skew (about 10° for a 1D code, about 15° for Data Matrix). It has not been tried on a real scanner. Aztec is found, but its angle is not reported. A page of codes adds about a second after the scan, on a background thread.
+- Barcode detection (ZXing.Net) reads 2D codes at any angle and 1D codes turned by 0/90/180/270, plus a modest skew (about 10° for a 1D code, about 15° for Data Matrix). Generated sheets cover the formats; a real scan is only as readable as the image the driver returns. Aztec is found, but its angle is not reported. A page of codes adds about a second after the scan, on a background thread.
 
 ## License
 

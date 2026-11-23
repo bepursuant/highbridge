@@ -119,13 +119,20 @@ export class HighbridgeClient {
 
   /**
    * Scans and returns one PNG per document. A document stacks that scan's pages top to bottom.
-   * @param {object} [options] scannerId, dpi, colorMode ('color'|'gray'|'blackWhite'), source ('auto'|'flatbed'|'feeder'), duplex,
-   *   maxPagesPerDocument (0 = no limit; a positive value starts another document),
-   *   maxSheets (0 = no limit; a positive value stops the feeder after that many sheets and keeps the session armed),
-   *   orientation (0, 90, 180, or 270, applied to each page before stacking),
-   *   showDriverUi, format ('png'),
-   *   barcodes (true to find barcodes on each finished document: `barcodeStatus` and `barcodes`),
-   *   barcodeFormats (e.g. ['qrCode', 'code128']; default: all common formats)
+   * A field left out uses the default saved for that scanner.
+   * @param {object} [options]
+   * @param {string} [options.scannerId] id from listScanners(); omit for the default scanner
+   * @param {number} [options.dpi] 50–1200
+   * @param {'color'|'gray'|'blackWhite'} [options.colorMode]
+   * @param {'auto'|'flatbed'|'feeder'} [options.source]
+   * @param {boolean} [options.duplex] feeder returns both sides; front and back are two pages
+   * @param {number} [options.maxPagesPerDocument] 0 keeps every page in one PNG
+   * @param {number} [options.maxSheets] 0 does not stop the feeder; a positive value stops after that many sheets
+   * @param {0|90|180|270} [options.orientation] clockwise sheet orientation, given to the scanner. highbridge does not rotate the image
+   * @param {boolean} [options.showDriverUi]
+   * @param {'png'} [options.format]
+   * @param {boolean} [options.barcodes] find barcodes on each finished document (`barcodeStatus` and `barcodes`)
+   * @param {string[]} [options.barcodeFormats] e.g. ['qrCode', 'code128']; default is the common set
    * @param {object} [hooks]
    * @param {(job: object) => void} [hooks.onProgress] called with each status update
    * @param {AbortSignal} [hooks.signal]
