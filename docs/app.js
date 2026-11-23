@@ -98,22 +98,63 @@ function convexHull(points) {
   return [...lower.slice(0, -1), ...upper.slice(0, -1)];
 }
 
-const BARCODE_STATUS = { partial: ' (search stopped early)', failed: ' (could not be analysed)', skipped: ' (not analysed)' };
+const BARCODE_STATUS = {
+  partial: 'Search stopped early',
+  failed: 'Could not be analysed',
+  skipped: 'Not analysed',
+};
 
-function renderBarcodes(barcodes, firstNumber) {
-  const rows = $('barcode-rows');
-  for (const code of barcodes) {
-    const row = rows.insertRow();
-    row.insertCell().textContent = String(firstNumber + code.page);
-    row.insertCell().textContent = code.format;
-    row.insertCell().textContent = code.text;
-    row.insertCell().textContent = code.orientation === undefined ? `found at ${code.rotation}°` : `${code.orientation}°`;
+const BARCODE_TYPE = {
+  qrCode: 'QR Code',
+  dataMatrix: 'Data Matrix',
+  pdf417: 'PDF417',
+  aztec: 'Aztec',
+  code128: 'Code 128',
+  code39: 'Code 39',
+  code93: 'Code 93',
+  codabar: 'Codabar',
+  ean13: 'EAN-13',
+  ean8: 'EAN-8',
+  upcA: 'UPC-A',
+  upcE: 'UPC-E',
+  itf: 'ITF',
+};
+
+function barcodeList(documentImage) {
+  const wrap = document.createElement('div');
+  wrap.className = 'doc-codes';
+  const codes = documentImage.barcodes ?? [];
+  const note = BARCODE_STATUS[documentImage.barcodeStatus];
+  if (codes.length === 0) {
+    const none = document.createElement('p');
+    none.className = 'codes none';
+    none.textContent = note ? `No barcodes. ${note}.` : 'No barcodes';
+    wrap.append(none);
+    return wrap;
   }
-  $('barcodes').hidden = rows.rows.length === 0;
+  const list = document.createElement('ul');
+  for (const code of codes) {
+    const item = document.createElement('li');
+    const type = document.createElement('span');
+    type.className = 'code-type';
+    type.textContent = BARCODE_TYPE[code.format] ?? code.format;
+    const value = document.createElement('span');
+    value.className = 'code-value';
+    value.textContent = code.text;
+    item.append(type, value);
+    list.append(item);
+  }
+  wrap.append(list);
+  if (note) {
+    const status = document.createElement('p');
+    status.className = 'codes none';
+    status.textContent = `${note}.`;
+    wrap.append(status);
+  }
+  return wrap;
 }
 
 function renderDocuments(documents) {
-  const firstNumber = pagesList.children.length + 1;
   for (const documentImage of documents) {
     const url = URL.createObjectURL(documentImage.blob);
     objectUrls.push(url);
@@ -134,19 +175,15 @@ function renderDocuments(documents) {
     const download = item.querySelector('.download');
     download.href = url;
     download.download = `scan-document-${number}.png`;
-    if (documentImage.provenance) item.querySelector('.meta').append(provenanceList(documentImage.provenance));
+    const meta = item.querySelector('.meta');
+    if (documentImage.provenance) meta.append(provenanceList(documentImage.provenance));
     if (documentImage.barcodeStatus) {
       item.querySelector('.thumb').append(barcodeOverlay(documentImage));
-      const codes = document.createElement('span');
-      const count = documentImage.barcodes.length;
-      codes.className = count ? 'codes' : 'codes none';
-      codes.textContent = `${count ? `${count} barcode${count === 1 ? '' : 's'}` : 'No barcodes'}${BARCODE_STATUS[documentImage.barcodeStatus] ?? ''}`;
-      download.before(codes);
+      meta.append(barcodeList(documentImage));
     }
+    meta.append(download);
     pagesList.append(item);
   }
-  const found = documents.flatMap((documentImage) => documentImage.barcodes ?? []);
-  if (found.length > 0) renderBarcodes(found, firstNumber);
   empty.hidden = pagesList.children.length > 0;
   clearButton.hidden = pagesList.children.length === 0;
 }
@@ -158,8 +195,6 @@ scanEl.addEventListener('hb-result', (event) => {
 clearButton.addEventListener('click', () => {
   objectUrls.splice(0).forEach((u) => URL.revokeObjectURL(u));
   pagesList.replaceChildren();
-  $('barcode-rows').replaceChildren();
-  $('barcodes').hidden = true;
   empty.hidden = false;
   clearButton.hidden = true;
 });
