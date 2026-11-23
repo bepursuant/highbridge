@@ -213,7 +213,7 @@ public sealed class ApiTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Barcode_request_returns_per_page_and_flat_results()
+    public async Task Barcode_request_returns_codes_on_their_document()
     {
         _runtime.Origins.Pair(Site);
         var create = Request(HttpMethod.Post, "/scanner", Site);
@@ -224,8 +224,7 @@ public sealed class ApiTests : IAsyncLifetime
 
         Assert.Equal(Jobs.ScanJobStatus.Completed, job.Status);
         Assert.Equal(BarcodeStatus.Done, job.Documents[0].BarcodeStatus);
-        var barcodes = Assert.IsAssignableFrom<IReadOnlyList<BarcodeResult>>(job.Barcodes);
-        Assert.Equal(barcodes.Select(b => b.Text).Order(), job.Documents[0].Barcodes!.Select(b => b.Text).Order());
+        var barcodes = job.Documents[0].Barcodes!;
         Assert.Contains(barcodes, b => b.Format == BarcodeFormat.Code128 && b.Rotation == 0);
         Assert.DoesNotContain(barcodes, b => b.Text.Contains("R270", StringComparison.Ordinal));
         Assert.All(barcodes, b => Assert.True(b.Points.Count >= 2));
@@ -237,8 +236,8 @@ public sealed class ApiTests : IAsyncLifetime
         _runtime.Origins.Pair(Site);
         var job = await PollUntilFinished((await Json<ScanJobResponse>(await _http.SendAsync(Request(HttpMethod.Post, "/scanner", Site)))).Id, Site);
 
-        Assert.Null(job.Barcodes);
         Assert.All(job.Documents, p => Assert.Null(p.BarcodeStatus));
+        Assert.All(job.Documents, p => Assert.Null(p.Barcodes));
     }
 
     [Theory]

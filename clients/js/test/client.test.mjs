@@ -128,7 +128,6 @@ class FakeApp {
       }] : [],
       pagesScanned: done ? 1 : 0,
       scanId: 'PT-AAAA-BBBB',
-      ...(job.options.barcodes && done ? { barcodes: found } : {}),
       ...(typeof job.usedFeeder === 'boolean' ? { usedFeeder: job.usedFeeder } : {}),
     };
   }
@@ -169,9 +168,10 @@ test('scan returns the barcodes the app found', async () => {
   const result = await client(app).scan({ barcodes: true, barcodeFormats: ['qrCode'] });
 
   assert.deepEqual(app.jobs.get('job123456789abcdef').options.barcodeFormats, ['qrCode']);
-  assert.equal(result.barcodes[0].text, 'PT');
-  assert.equal(result.barcodes[0].rotation, 180);
+  assert.equal(result.barcodes, undefined);
   assert.equal(result.documents[0].barcodeStatus, 'done');
+  assert.equal(result.documents[0].barcodes[0].text, 'PT');
+  assert.equal(result.documents[0].barcodes[0].rotation, 180);
   assert.equal(result.documents[0].barcodes[0].points.length, 2);
 });
 

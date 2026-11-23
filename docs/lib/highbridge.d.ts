@@ -129,8 +129,6 @@ export interface ScanJob {
   pagesScanned: number;
   /** Short id embedded in every document of this scan. */
   scanId: string;
-  /** Every document's barcodes in document order; only when the scan asked for barcodes. */
-  barcodes?: Barcode[];
   /** False when the scanner did not use the feeder. */
   usedFeeder?: boolean;
 }
@@ -140,8 +138,6 @@ export interface ScanResult {
   /** Short id embedded in every document of this scan. */
   scanId: string;
   documents: Array<DocumentInfo & { blob: Blob }>;
-  /** Every document's barcodes in document order; only when the scan asked for barcodes. */
-  barcodes?: Barcode[];
   /** False when the scanner did not use the feeder. `scanSession` stops when this is false. */
   usedFeeder?: boolean;
 }

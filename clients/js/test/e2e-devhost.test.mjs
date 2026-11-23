@@ -100,8 +100,9 @@ test('e2e: barcode scan returns rotated codes from the mock barcode sheet', { sk
   const result = await client.scan({ scannerId: 'mock-barcodes', dpi: 120, maxSheets: 1, barcodes: true });
 
   assert.equal(result.documents.length, 1);
+  assert.equal(result.barcodes, undefined);
   assert.equal(result.documents[0].barcodeStatus, 'done');
-  const byText = Object.fromEntries(result.barcodes.map((b) => [b.text, b]));
+  const byText = Object.fromEntries(result.documents[0].barcodes.map((b) => [b.text, b]));
   const upright = byText['https://highbridge.example/doc/P1-R0'];
   const linear = byText['SKEW-C128-P1'];
   assert.equal(upright.format, 'qrCode');
@@ -111,7 +112,6 @@ test('e2e: barcode scan returns rotated codes from the mock barcode sheet', { sk
   assert.equal(linear.format, 'code128');
   assert.equal(linear.rotation, 0);
   assert.equal(byText['PT-C128-P1-R270'], undefined);
-  assert.equal(result.documents[0].barcodes.length, result.barcodes.length);
 
   await assert.rejects(
     client._json('POST', '/scanner', { barcodeFormats: ['qrCode'] }),

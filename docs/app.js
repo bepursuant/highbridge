@@ -112,7 +112,7 @@ function renderBarcodes(barcodes, firstNumber) {
   $('barcodes').hidden = rows.rows.length === 0;
 }
 
-function renderDocuments(documents, barcodes) {
+function renderDocuments(documents) {
   const firstNumber = pagesList.children.length + 1;
   for (const documentImage of documents) {
     const url = URL.createObjectURL(documentImage.blob);
@@ -145,13 +145,14 @@ function renderDocuments(documents, barcodes) {
     }
     pagesList.append(item);
   }
-  if (barcodes) renderBarcodes(barcodes, firstNumber);
+  const found = documents.flatMap((documentImage) => documentImage.barcodes ?? []);
+  if (found.length > 0) renderBarcodes(found, firstNumber);
   empty.hidden = pagesList.children.length > 0;
   clearButton.hidden = pagesList.children.length === 0;
 }
 
 scanEl.addEventListener('hb-result', (event) => {
-  renderDocuments(event.detail.documents, event.detail.barcodes);
+  renderDocuments(event.detail.documents);
 });
 
 clearButton.addEventListener('click', () => {

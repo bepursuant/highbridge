@@ -124,7 +124,7 @@ export class HighbridgeClient {
    *   maxSheets (0 = no limit; a positive value stops the feeder after that many sheets and keeps the session armed),
    *   orientation (0, 90, 180, or 270, applied to each page before stacking),
    *   showDriverUi, format ('png'),
-   *   barcodes (true to find barcodes on each finished document: `barcodeStatus` and `barcodes`, and the result a flat `barcodes`),
+   *   barcodes (true to find barcodes on each finished document: `barcodeStatus` and `barcodes`),
    *   barcodeFormats (e.g. ['qrCode', 'code128']; default: all common formats)
    * @param {object} [hooks]
    * @param {(job: object) => void} [hooks.onProgress] called with each status update
@@ -168,7 +168,6 @@ export class HighbridgeClient {
     );
     this._json('DELETE', `/scanner/${job.id}`).catch(() => {});
     const result = { id: job.id, scanId: job.scanId, documents };
-    if (job.barcodes) result.barcodes = job.barcodes;
     if (typeof job.usedFeeder === 'boolean') result.usedFeeder = job.usedFeeder;
     return result;
   }

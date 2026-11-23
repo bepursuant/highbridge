@@ -144,7 +144,6 @@ public sealed record DocumentResponse(
     BarcodeStatus? BarcodeStatus = null,
     IReadOnlyList<BarcodeResult>? Barcodes = null);
 
-/// <param name="Barcodes">Every document's barcodes in one list; only when the scan asked for barcodes.</param>
 public sealed record ScanJobResponse(
     string Id,
     ScanJobStatus Status,
@@ -153,8 +152,7 @@ public sealed record ScanJobResponse(
     DateTimeOffset CreatedAt,
     DateTimeOffset? FinishedAt,
     ErrorResponse? Error,
-    IReadOnlyList<DocumentResponse> Documents,
-    IReadOnlyList<BarcodeResult>? Barcodes = null)
+    IReadOnlyList<DocumentResponse> Documents)
 {
     /// <summary>Short id embedded in every document of this scan.</summary>
     public string ScanId { get; init; } = "";
@@ -173,8 +171,7 @@ public sealed record ScanJobResponse(
         job.CreatedAt,
         job.FinishedAt,
         job.ErrorCode is null ? null : new ErrorResponse(job.ErrorCode, job.ErrorMessage ?? job.ErrorCode),
-        job.Documents.Select(document => WithBarcodes(new DocumentResponse(document.Index, document.MediaType, document.Width, document.Height, document.Data.Length, $"/scanner/{job.Id}/documents/{document.Index}", document.PageCount, document.Provenance), job.Barcodes)).ToArray(),
-        job.Barcodes?.All)
+        job.Documents.Select(document => WithBarcodes(new DocumentResponse(document.Index, document.MediaType, document.Width, document.Height, document.Data.Length, $"/scanner/{job.Id}/documents/{document.Index}", document.PageCount, document.Provenance), job.Barcodes)).ToArray())
     {
         ScanId = job.ScanId,
         PagesScanned = job.PagesScanned,

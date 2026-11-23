@@ -58,7 +58,7 @@ Steady state for a paired site on a machine where the LNA permission is granted:
 | `POST /pair` | any valid origin | Shows the pairing prompt; returns `{paired}` |
 | `GET /scanner` | paired | List sources |
 | `POST /scanner` | paired, current approval | `{scannerId?, dpi, colorMode, duplex, source, showDriverUi, maxPagesPerDocument, maxSheets, orientation, format: "png", barcodes?, barcodeFormats?}`. Omitted fields use the scanner's saved defaults. → `202 {id, status, format, scanId, pagesScanned, usedFeeder?, documents}` |
-| `GET /scanner/{id}` | job owner | Status (`queued`, `scanning`, `completed`, `failed`, `canceled`) plus documents, and barcodes when requested. Also claims a protocol-launched job |
+| `GET /scanner/{id}` | job owner | Status (`queued`, `scanning`, `completed`, `failed`, `canceled`) plus documents. A barcode request puts the codes on the document they were found on. Also claims a protocol-launched job |
 | `GET /scanner/{id}/documents/{n}` | job owner | `image/png` of one stacked document |
 | `DELETE /scanner/{id}` | job owner | Discard |
 | `GET /pcsc` | current approval | `{readers: [{id, name, backend}]}` |
