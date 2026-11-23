@@ -5,7 +5,6 @@ using Highbridge.Cards;
 using Highbridge.Configuration;
 using Highbridge.Consent;
 using Highbridge.Hosting;
-using Highbridge.Provenance;
 using Highbridge.Scanning;
 using Highbridge.Server;
 
@@ -19,7 +18,6 @@ var preApproved = new List<string>();
 var urls = new List<string>();
 int pageDelayMs = 400;
 string? settingsPath = null;
-StampMode stampMode = StampMode.Optional;
 
 for (int i = 0; i < args.Length; i++)
 {
@@ -45,15 +43,6 @@ for (int i = 0; i < args.Length; i++)
         case "--settings":
             settingsPath = args[++i];
             break;
-        case "--stamp":
-            stampMode = args[++i] switch
-            {
-                "optional" => StampMode.Optional,
-                "required" => StampMode.Required,
-                "disabled" => StampMode.Disabled,
-                var other => throw new ArgumentException($"--stamp must be optional, required or disabled, not '{other}'."),
-            };
-            break;
         case "--write-barcode-sheets":
             string folder = args[++i];
             Directory.CreateDirectory(folder);
@@ -74,7 +63,6 @@ for (int i = 0; i < args.Length; i++)
                   --allow-origin <url>   pre-approve an origin, like policy.json AllowedOrigins
                   --page-delay-ms <n>    simulated time per page (default 400)
                   --settings <path>      persist pairings to a JSON file (default: in memory)
-                  --stamp <mode>         provenance stamp policy: optional (default), required, disabled
                   --write-barcode-sheets <folder>
                                          write the mock barcode test sheets as printable PNGs and exit
                   highbridge://...       forward a protocol URL to the running host (or handle it at startup)
@@ -96,7 +84,7 @@ if (urls.Count > 0 && await SingleInstanceChannel.TrySendAsync(urls.ToArray(), p
 using var loggerFactory = LoggerFactory.Create(b => b.AddSimpleConsole(o => o.SingleLine = true).SetMinimumLevel(LogLevel.Information));
 var logger = loggerFactory.CreateLogger("highbridge");
 
-var policy = new HighbridgePolicy { AllowedOrigins = preApproved, ProvenanceStamp = new ProvenanceStampPolicy { Mode = stampMode } };
+var policy = new HighbridgePolicy { AllowedOrigins = preApproved };
 var settings = new SettingsStore(settingsPath);
 var consent = new LoggingConsent(new FixedConsentService(allow), logger);
 using var runtime = new HighbridgeRuntime(

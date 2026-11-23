@@ -111,11 +111,16 @@ public sealed class ScanJobManager : IDisposable
             throw new JobRejectedException("invalid_request_id", "request id must be 16-64 characters of [A-Za-z0-9_-].");
         }
 
-        var stamp = _provenance.Resolve(options.Stamp, _origins.ApprovalCoversIdentity(origin), out bool stampRequired);
-        var job = new ScanJob(id, origin, options with { Stamp = stamp }, trigger, _time.GetUtcNow())
+        if (!_origins.ApprovalCoversIdentity(origin))
         {
-            StampRequiredByPolicy = stampRequired,
-            ScanId = stamp is null ? null : ProvenanceStamping.NewScanId(),
+            throw new JobRejectedException(
+                "approval_required",
+                "Every scan includes your Windows user name and computer name. Approve this site again (POST /pair) to allow that.");
+        }
+
+        var job = new ScanJob(id, origin, options, trigger, _time.GetUtcNow())
+        {
+            ScanId = ProvenanceStamping.NewScanId(),
         };
         if (!_jobs.TryAdd(id, job))
         {
@@ -265,9 +270,9 @@ public sealed class ScanJobManager : IDisposable
             {
                 documents = ScanDocuments.Build(delivered, job.Options);
             }
-            catch (Exception ex) when (job.Stamp is not null && ex is InvalidDataException or NotSupportedException)
+            catch (Exception ex) when (ex is InvalidDataException or NotSupportedException)
             {
-                throw new ScannerException("stamp_failed", "highbridge could not add the provenance stamp, so no pages were returned.", ex);
+                throw new ScannerException("stamp_failed", "highbridge could not add the provenance record, so no pages were returned.", ex);
             }
             if (job.Barcodes is { } barcodes)
             {
@@ -279,10 +284,7 @@ public sealed class ScanJobManager : IDisposable
                 }
             }
 
-            if (job.Stamp is { } stamp)
-            {
-                documents = await StampAsync(job, stamp, documents, ct).ConfigureAwait(false);
-            }
+            documents = await StampAsync(job, documents, ct).ConfigureAwait(false);
 
             job.SetDocuments(documents);
             if (job.Barcodes is { } pending)
@@ -318,7 +320,7 @@ public sealed class ScanJobManager : IDisposable
         }
     }
 
-    private async Task<IReadOnlyList<ScannedDocument>> StampAsync(ScanJob job, StampOptions stamp, IReadOnlyList<ScannedDocument> documents, CancellationToken ct)
+    private async Task<IReadOnlyList<ScannedDocument>> StampAsync(ScanJob job, IReadOnlyList<ScannedDocument> documents, CancellationToken ct)
     {
         string scanner = documents.All(document => !string.IsNullOrWhiteSpace(document.ScannerName))
             ? string.Empty
@@ -328,7 +330,7 @@ public sealed class ScanJobManager : IDisposable
             new ScannedPage(document.Index, document.MediaType, document.Width, document.Height, document.Data) { ScannerName = document.ScannerName },
             now)).ToArray();
         var stamped = await Task.Run(
-            () => _provenance.StampAll(received, stamp, job.Origin, job.ScanId!, scanner, _time.LocalTimeZone),
+            () => _provenance.StampAll(received, job.Origin, job.ScanId, scanner, _time.LocalTimeZone),
             ct).ConfigureAwait(false);
         return stamped.Select((page, index) => documents[index].Stamped(page.Data, page.Width, page.Height, page.Provenance!)).ToArray();
     }

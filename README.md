@@ -30,7 +30,7 @@ Status: **proof of concept** for Windows 10/11 workstations (32-bit build, PNG o
       └── highbridge://launch | scan | read-card ──► Windows ──┘
 ```
 
-1. **Pairing (once per site).** The first `POST /pair` from a site shows *"Allow this website to use your scanners and card reader?"*. The prompt names both devices and says a card read sends the full card number, the expiry, and the cardholder name to that site over the local connection, and that a stamped scan includes the Windows user and computer name. This is the only highbridge prompt. Approved origins are saved in `%APPDATA%\Highbridge\settings.json` and can be removed in the tray menu's **Approved websites** window. The browser supplies the `Origin` header, so pages cannot fake it. Sites approved under older wording are asked again before the first card read.
+1. **Pairing (once per site).** The first `POST /pair` from a site shows *"Allow this website to use your scanners and card reader?"*. The prompt names both devices and says a card read sends the full card number, the expiry, and the cardholder name to that site over the local connection, and that every scan includes the Windows user and computer name. This is the only highbridge prompt. Approved origins are saved in `%APPDATA%\Highbridge\settings.json` and can be removed in the tray menu's **Approved websites** window. The browser supplies the `Origin` header, so pages cannot fake it. Sites approved under older wording are asked again before the first scan or card read.
 2. **Scanning.** `POST /scanner` from a paired site starts the scan right away. highbridge also asks the driver to hide its progress window (`CAP_INDICATORS`) unless the page asks for the driver UI. The page polls `GET /scanner/{id}` and downloads each document from `/scanner/{id}/documents/{n}`. A document is one PNG of that scan's pages, stacked top to bottom. Results stay in memory only, are visible only to the origin that requested them, and expire after 10 minutes.
 3. **`highbridge://` links** start the app (`highbridge://launch`), queue a scan (`highbridge://scan?…`), or queue a card read (`highbridge://read-card?…`) for an *already paired* origin. The scanner or reader does not start until that origin's page polls the job over HTTP (within 30 seconds), so a forged link cannot run the device. A protocol link never carries data back, and it can never pair a site.
 4. **Browser permission.** Chrome, Edge and Firefox ask the user once to let a public site reach "apps on this device" (Local Network Access, loopback). The client sends `targetAddressSpace: 'loopback'` and should be called from a click.
@@ -42,7 +42,7 @@ Status: **proof of concept** for Windows 10/11 workstations (32-bit build, PNG o
 | `GET /status` | `{app, version, apiVersion, backend, devices: [{kind, backend}], paired, pairingAllowed}`. `backend` stays the scanner backend |
 | `POST /pair` | Ask the user to approve this site |
 | `GET /scanner` | List scanners (paired sites only) |
-| `POST /scanner` | Body: `{scannerId?, dpi, colorMode: color\|gray\|blackWhite, source: auto\|flatbed\|feeder, duplex, showDriverUi, maxPagesPerDocument, maxSheets, orientation, format: png, stamp?: {position: top\|bottom}, barcodes?, barcodeFormats?}`. A field left out uses the default saved for that scanner. Returns `202` with the job |
+| `POST /scanner` | Body: `{scannerId?, dpi, colorMode: color\|gray\|blackWhite, source: auto\|flatbed\|feeder, duplex, showDriverUi, maxPagesPerDocument, maxSheets, orientation, format: png, barcodes?, barcodeFormats?}`. A field left out uses the default saved for that scanner. Returns `202` with the job |
 | `GET /scanner/{id}` | Job status: `queued`, `scanning`, `completed`, `failed` or `canceled`, plus documents. With `barcodes: true`, also the barcodes found |
 | `GET /scanner/{id}/documents/{n}` | Document image (`image/png`): the pages of that document stacked top to bottom |
 | `DELETE /scanner/{id}` | Discard or cancel a job |
@@ -57,23 +57,21 @@ Status: **proof of concept** for Windows 10/11 workstations (32-bit build, PNG o
 
 `scanSession` and `readCardSession` in the JS client arm that from one click. They repeat the existing POST and status poll until Stop or an error that needs a person. A card session does not read again until that card has left the slot (`waitForRemoval` on the later reads). The card number is still only on the completed job. Pairing, claim timeouts, and the one-job locks are unchanged.
 
-`barcodes: true` finds barcodes on each finished document (QR, Data Matrix, PDF417, Code 128, Code 39, EAN-13, EAN-8, UPC-A, UPC-E and ITF, unless `barcodeFormats` names a subset, for example `["qrCode", "code128"]`). It is off unless asked. Detection runs on the stacked document in the orientation the scanner delivered, so it does not turn the image again. A wide faded Code 128 is also searched in full-width strips. The job stays `scanning` until detection finishes. Each barcode is `{page, format, text, rotation, orientation, points}`: `page` is the document index, `orientation` is the code's own angle when it can be measured, and `points` are pixels of the unstamped document. Documents also carry `barcodeStatus`: `done`, `partial` (the time budget ran out), `failed` or `skipped`. The same list is repeated once per document and once for the whole job. A `highbridge://scan` link takes the same options as `barcodes=true&barcodeFormats=qrCode,code128`. A stamp, when one is requested, is written into the stacked document after that copy is taken. The image itself is unchanged.
+`barcodes: true` finds barcodes on each finished document (QR, Data Matrix, PDF417, Code 128, Code 39, EAN-13, EAN-8, UPC-A, UPC-E and ITF, unless `barcodeFormats` names a subset, for example `["qrCode", "code128"]`). It is off unless asked. Detection runs on the stacked document in the orientation the scanner delivered, so it does not turn the image again. A wide faded Code 128 is also searched in full-width strips. The job stays `scanning` until detection finishes. Each barcode is `{page, format, text, rotation, orientation, points}`: `page` is the document index, `orientation` is the code's own angle when it can be measured, and `points` are pixels of the document. Documents also carry `barcodeStatus`: `done`, `partial` (the time budget ran out), `failed` or `skipped`. The same list is repeated once per document and once for the whole job. A `highbridge://scan` link takes the same options as `barcodes=true&barcodeFormats=qrCode,code128`. Provenance is written into the stacked document after that copy is taken. The image itself is unchanged.
 
-### Provenance stamp
+### Provenance
 
-With `stamp: { position: 'top' | 'bottom' }` (or `stamp=top|bottom` in a `highbridge://scan` link), highbridge writes a provenance record into the finished document and leaves the pixels alone. `position` is stored for a later visible stamp, such as on a PDF; it does not change the PNG.
+Every finished document gets a provenance record. highbridge fills in every value: the scan id, the time, the Windows user, the computer name, the scanner, the site, and the page numbers. The page cannot turn this off or supply its own text.
 
-highbridge fills in every value. The page can only choose the position, and any other member of `stamp` is rejected as `invalid_options`.
+The record is embedded in the PNG as an `iTXt` chunk named `highbridge:provenance` (JSON), plus `Software`, `Creation Time`, `Source` and `Description`. The image chunks are copied unchanged. The same record is returned to the page as `document.provenance`, and the job carries the shared `scanId`. `originalSha256` is computed over the document pixels (method `highbridge-pixels-v1`), so it can be rechecked from the PNG alone with `ProvenanceVerifier` in `Highbridge.Core`.
 
-The record is embedded in the PNG as an `iTXt` chunk named `highbridge:provenance` (JSON), plus `Software`, `Creation Time`, `Source` and `Description`. The image chunks are copied unchanged. The same record is returned to the page as `document.provenance`. `originalSha256` is computed over the document pixels (method `highbridge-pixels-v1`), so it can be rechecked from the stamped PNG alone with `ProvenanceVerifier` in `Highbridge.Core`.
+Documents are published only once the record is written; until then, `pagesScanned` shows how many scanner pages have arrived.
 
-A stamped job publishes its documents only once they are stamped; until then, `pagesScanned` shows how many scanner pages have arrived.
-
-Stamped scans send the user's Windows name and computer name to the site, so the pairing prompt says so. Sites approved before that wording are asked again the first time they request a stamp (`approval_required`), and the JS client handles this automatically. Sites listed in policy, and stamps required by policy, are covered by the admin.
+The record includes the user's Windows name and computer name, so the pairing prompt says so. Sites approved before that wording are asked again before the next scan (`approval_required`), and the JS client handles this automatically. Sites listed in policy are covered by the admin.
 
 A completed card read returns `reader`, `interface` (`contact` or `contactless`), `applications` (every directory entry) and `selected` (one application: `aid`, `label`, `preferredName`, `priority`, `pan`, `panLast4`, `expiry`, `cardholderName`). `pan` is the card number from the chip, digits only. Absent optional fields are omitted. highbridge is a program on this PC: the number is returned only to the paired site over `127.0.0.1`, it is not sent to a highbridge server, and it is not written to the log. Tracks, PIN, cryptogram, and raw card bytes are not returned. The copy kept for the response is wiped when the job is deleted or expires (10 minutes).
 
-Errors are returned as `{ "error": "<code>", "message": "…" }`. Common codes are `origin_not_paired`, `pairing_denied`, `invalid_options`, `approval_required` and `stamp_disabled` (provenance stamp), `stamp_failed`, `paper_jam`, `no_scanners`, `twain_unavailable`, `scan_timeout` (the scanner stopped responding; the message says at which step), `not_claimed` (a `highbridge://` job that no page picked up), `card_reader_disabled`, `no_card`, `no_payment_apps`, `app_not_found`, `read_failed`, `pcsc_unavailable` and `read_timeout`.
+Errors are returned as `{ "error": "<code>", "message": "…" }`. Common codes are `origin_not_paired`, `pairing_denied`, `invalid_options`, `approval_required`, `stamp_failed` (the provenance record could not be written), `paper_jam`, `no_scanners`, `twain_unavailable`, `scan_timeout` (the scanner stopped responding; the message says at which step), `not_claimed` (a `highbridge://` job that no page picked up), `card_reader_disabled`, `no_card`, `no_payment_apps`, `app_not_found`, `read_failed`, `pcsc_unavailable` and `read_timeout`.
 
 ## Repository layout
 
@@ -256,12 +254,11 @@ To rerun the TWAIN tests without a scanner on Linux, `scripts/test-twain-wine.sh
   "allowedOrigins": ["https://app.example.com"],
   "allowPairing": false,
   "allowInsecureLoopbackOrigins": false,
-  "provenanceStamp": { "mode": "required", "position": "bottom" },
   "cardReader": { "mode": "enabled" }
 }
 ```
 
-`allowedOrigins` are approved without a prompt. A listed origin may scan and read cards. `allowPairing: false` stops users from approving other sites. `provenanceStamp.mode` is `optional` (the default: the page decides), `required` (every scan is stamped) or `disabled` (stamp requests fail with `stamp_disabled`); `position`, when set, overrides the page's choice. `cardReader.mode` is `enabled` (the default) or `disabled`. `disabled` makes every card route return `card_reader_disabled` and leaves scanning alone. The policy is read from this file only (no Group Policy templates); push it with your usual deployment tool. The port is always 47116.
+`allowedOrigins` are approved without a prompt. A listed origin may scan and read cards. `allowPairing: false` stops users from approving other sites. Every scan carries provenance; there is no policy switch for it. `cardReader.mode` is `enabled` (the default) or `disabled`. `disabled` makes every card route return `card_reader_disabled` and leaves scanning alone. The policy is read from this file only (no Group Policy templates); push it with your usual deployment tool. The port is always 47116.
 
 To skip browser prompts on managed machines, use the browsers' own policies: the Local Network Access allowlist policies in Chrome and Edge, `LocalNetworkAccess.SkipDomains` in Firefox, and `AutoLaunchProtocolsFromOrigins` for the `highbridge://` prompt.
 
@@ -271,7 +268,7 @@ Copy `clients/js/highbridge.js` (and `highbridge.d.ts` for TypeScript) into your
 
 - `await client.connect()` makes sure the app is running (launching it via `highbridge://launch` if needed) and that the site is paired.
 - `await client.listScanners()` lists scanners.
-- `await client.scan(options, { onProgress, signal })` returns `{ id, documents: [{ index, width, height, pageCount, mediaType, blob, provenance? }], stamp? }`. Pass `stamp: { position: 'bottom' }` for the provenance stamp. With `barcodes: true` the result also has `barcodes`, and each document has `barcodeStatus` and `barcodes`. A field the call leaves out uses the default saved for that scanner in the tray. `<hb-scan>` and `<hb-read>` are the same calls as custom elements. If the app isn't running, it starts it via a `highbridge://` link.
+- `await client.scan(options, { onProgress, signal })` returns `{ id, scanId, documents: [{ index, width, height, pageCount, mediaType, blob, provenance }] }`. With `barcodes: true` the result also has `barcodes`, and each document has `barcodeStatus` and `barcodes`. A field the call leaves out uses the default saved for that scanner in the tray. `<hb-scan>` and `<hb-read>` are the same calls as custom elements. If the app isn't running, it starts it via a `highbridge://` link.
 - `await client.readCard({ readerId, interface, aid, waitForCardMs })` returns `{ id, reader, interface, applications, selected }`. `selected` has `pan` (the full chip card number), `panLast4`, `expiry` and `cardholderName`. If the app isn't running, it starts it via `highbridge://read-card`.
 - Errors are `HighbridgeError` objects with a `code`, such as `not_running`, `setup_required` (when `installerUrl` is set and the app never starts), `loopback_blocked`, `pairing_denied` or `paper_jam`.
 - Call these from a click handler, and serve your site over HTTPS. Browsers deny loopback access to insecure public pages.
@@ -285,7 +282,7 @@ Copy `clients/js/highbridge.js` (and `highbridge.d.ts` for TypeScript) into your
 - 32-bit only, so only 32-bit TWAIN drivers are visible.
 - Canceling a scan stops at the next page boundary. Scans waiting in the driver's own dialog cannot be aborted from the web page.
 - One instance per Windows session on the fixed port 47116; terminal servers are not supported.
-- Provenance stamps are not signed or trusted-timestamped yet: the hash shows that the page content matches the record, but anyone could rewrite both. A `highbridge://` stamped scan from a site that still needs re-approval is rejected in the app (logged), so the page times out; the HTTP path asks for re-approval instead.
+- Provenance records are not signed or trusted-timestamped yet: the hash shows that the page content matches the record, but anyone could rewrite both. A `highbridge://` scan from a site that still needs re-approval is rejected in the app (logged), so the page times out; the HTTP path asks for re-approval instead.
 - Barcode detection (ZXing.Net) reads 2D codes at any angle and 1D codes turned by 0/90/180/270, plus a modest skew (about 10° for a 1D code, about 15° for Data Matrix). It has not been tried on a real scanner. Aztec is found, but its angle is not reported. A page of codes adds about a second after the scan, on a background thread.
 
 ## License

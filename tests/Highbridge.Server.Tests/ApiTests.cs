@@ -276,62 +276,40 @@ public sealed class ApiTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Stamped_scan_returns_provenance_and_embeds_it_in_each_page()
+    public async Task Every_scan_returns_provenance_and_embeds_it_in_each_page()
     {
         _runtime.Origins.Pair(Site);
         var create = Request(HttpMethod.Post, "/scanner", Site);
-        create.Content = JsonContent.Create(new { source = "feeder", stamp = new { position = "top" } });
+        create.Content = JsonContent.Create(new { source = "feeder", stamp = new { position = "top", user = "someone else" } });
         var created = await Json<ScanJobResponse>(await _http.SendAsync(create));
-        Assert.Equal(Provenance.StampPosition.Top, created.Stamp!.Position);
-        Assert.False(created.Stamp.RequiredByPolicy);
+        Assert.Matches("^HB-", created.ScanId);
 
         var job = await PollUntilFinished(created.Id, Site);
 
         Assert.Equal(Jobs.ScanJobStatus.Completed, job.Status);
         Assert.Equal(2, job.PagesScanned);
-        var stamped = Assert.Single(job.Documents);
-        Assert.Equal(2, stamped.PageCount);
-        foreach (var info in job.Documents)
-        {
-            var provenance = info.Provenance!;
-            Assert.Equal((Site, created.Stamp.ScanId, 1), (provenance.Origin, provenance.ScanId, provenance.PageCount));
-            Assert.Equal(1, provenance.Page);
-            Assert.Equal(Environment.MachineName, provenance.Workstation);
-            Assert.EndsWith("\\" + Environment.UserName, provenance.User);
+        var document = Assert.Single(job.Documents);
+        Assert.Equal(2, document.PageCount);
+        var provenance = document.Provenance!;
+        Assert.Equal((Site, created.ScanId, 1), (provenance.Origin, provenance.ScanId, provenance.PageCount));
+        Assert.Equal(1, provenance.Page);
+        Assert.Equal(Environment.MachineName, provenance.Workstation);
+        Assert.EndsWith("\\" + Environment.UserName, provenance.User);
+        Assert.DoesNotContain("someone else", provenance.User);
 
-            byte[] png = await (await _http.SendAsync(Request(HttpMethod.Get, info.Url, Site))).Content.ReadAsByteArrayAsync();
-            var check = Provenance.ProvenanceVerifier.Verify(png);
-            Assert.True(check.Valid, check.Problem);
-            Assert.Equal(provenance, check.Provenance);
-        }
-    }
-
-    [Theory]
-    [InlineData("{\"stamp\": {\"position\": \"top\", \"text\": \"Signed by the CEO\"}}")]
-    [InlineData("{\"stamp\": {\"user\": \"someone else\"}}")]
-    [InlineData("{\"stamp\": {\"position\": \"left\"}}")]
-    [InlineData("{\"stamp\": true}")]
-    public async Task Pages_cannot_supply_provenance_values(string body)
-    {
-        _runtime.Origins.Pair(Site);
-        var request = Request(HttpMethod.Post, "/scanner", Site);
-        request.Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
-
-        var response = await _http.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal("invalid_options", (await Error(response)).Error);
+        byte[] png = await (await _http.SendAsync(Request(HttpMethod.Get, document.Url, Site))).Content.ReadAsByteArrayAsync();
+        var check = Provenance.ProvenanceVerifier.Verify(png);
+        Assert.True(check.Valid, check.Problem);
+        Assert.Equal(provenance, check.Provenance);
     }
 
     [Fact]
-    public async Task Site_approved_under_old_wording_is_asked_again_before_its_first_stamped_scan()
+    public async Task Site_approved_under_old_wording_is_asked_again_before_its_first_scan()
     {
         _runtime.Settings.Update(s => s.PairedOrigins.Add(new PairedOrigin { Origin = Site }));
         Assert.True((await GetJson<StatusResponse>("/status", Site)).Paired);
 
-        var stamped = Request(HttpMethod.Post, "/scanner", Site);
-        stamped.Content = JsonContent.Create(new { stamp = new { } });
-        var rejected = await _http.SendAsync(stamped);
+        var rejected = await _http.SendAsync(Request(HttpMethod.Post, "/scanner", Site));
         Assert.Equal(HttpStatusCode.Forbidden, rejected.StatusCode);
         Assert.Equal("approval_required", (await Error(rejected)).Error);
 
@@ -340,22 +318,7 @@ public sealed class ApiTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, (await _http.SendAsync(Request(HttpMethod.Post, "/pair", Site))).StatusCode);
         Assert.Equal(1, Consent.PairingRequests);
 
-        var retry = Request(HttpMethod.Post, "/scanner", Site);
-        retry.Content = JsonContent.Create(new { stamp = new { } });
-        Assert.Equal(HttpStatusCode.Accepted, (await _http.SendAsync(retry)).StatusCode);
-    }
-
-    [Fact]
-    public async Task Policy_required_stamp_applies_to_scans_that_did_not_ask()
-    {
-        await RestartAsync(policy: new HighbridgePolicy { ProvenanceStamp = new Provenance.ProvenanceStampPolicy { Mode = Provenance.StampMode.Required } });
-        _runtime.Origins.Pair(Site);
-
-        var created = await Json<ScanJobResponse>(await _http.SendAsync(Request(HttpMethod.Post, "/scanner", Site)));
-        var job = await PollUntilFinished(created.Id, Site);
-
-        Assert.True(job.Stamp!.RequiredByPolicy);
-        Assert.All(job.Documents, p => Assert.Equal(Provenance.StampPosition.Bottom, p.Provenance!.Position));
+        Assert.Equal(HttpStatusCode.Accepted, (await _http.SendAsync(Request(HttpMethod.Post, "/scanner", Site))).StatusCode);
     }
 
     [Fact]

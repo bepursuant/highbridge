@@ -1,6 +1,5 @@
 using System.Text.Json.Serialization;
 using Highbridge.Barcodes;
-using Highbridge.Provenance;
 using Highbridge.Scanning;
 
 namespace Highbridge.Jobs;
@@ -87,13 +86,8 @@ public sealed class ScanJob
 
     internal CancellationTokenSource Cancellation { get; } = new();
 
-    /// <summary>The effective stamp (after policy); same as <c>Options.Stamp</c>.</summary>
-    public StampOptions? Stamp => Options.Stamp;
-
-    public bool StampRequiredByPolicy { get; internal init; }
-
-    /// <summary>Short id printed on stamped pages; made by highbridge, unlike <see cref="Id"/>.</summary>
-    public string? ScanId { get; internal init; }
+    /// <summary>Short id embedded in every document of this scan; made by highbridge, unlike <see cref="Id"/>.</summary>
+    public string ScanId { get; internal init; } = "";
 
     /// <summary>False when the scan did not use the feeder, so a session must not loop it.</summary>
     public bool? UsedFeeder { get; internal set; }

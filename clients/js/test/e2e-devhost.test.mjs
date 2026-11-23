@@ -67,35 +67,30 @@ test('e2e: highbridge://scan forwarded from a second process is collected by req
   assert.equal(result.documents.length, 1);
 });
 
-test('e2e: stamped scan embeds the provenance record without changing the image', { skip: !DLL && 'set HIGHBRIDGE_DEVHOST_DLL' }, async () => {
+test('e2e: every scan embeds provenance without changing the image', { skip: !DLL && 'set HIGHBRIDGE_DEVHOST_DLL' }, async () => {
   const client = new HighbridgeClient({ port: PORT, fetch: withOrigin(ORIGIN), origin: ORIGIN, storage: null, pollIntervalMs: 50 });
   await client.connect({ launch: false });
   const plain = await client.scan({ source: 'flatbed', colorMode: 'gray' });
 
-  const result = await client.scan({ source: 'feeder', maxSheets: 1, colorMode: 'gray', stamp: { position: 'bottom' } });
+  const result = await client.scan({ source: 'feeder', maxSheets: 1, colorMode: 'gray', stamp: { user: 'CEO' } });
 
-  assert.match(result.stamp.scanId, /^HB-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
+  assert.match(result.scanId, /^HB-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
   assert.equal(result.documents.length, 1);
   assert.equal(result.documents[0].pageCount, 1);
   for (const page of result.documents) {
     const p = page.provenance;
     assert.equal(p.origin, ORIGIN);
-    assert.equal(p.scanId, result.stamp.scanId);
+    assert.equal(p.scanId, result.scanId);
     assert.deepEqual([p.page, p.pageCount], [1, 1]);
     assert.match(p.originalSha256, /^[0-9a-f]{64}$/);
     assert.match(p.user, /\\/);
+    assert.equal(p.user.includes('CEO'), false);
     assert.equal(page.height, plain.documents[0].height);
     const text = new TextDecoder('latin1').decode(await page.blob.arrayBuffer());
     assert.ok(text.includes('iTXthighbridge:provenance'));
     assert.ok(text.includes(p.originalSha256));
   }
-  assert.equal(plain.documents[0].provenance, undefined);
-});
-
-test('e2e: pages cannot put their own text in the stamp', { skip: !DLL && 'set HIGHBRIDGE_DEVHOST_DLL' }, async () => {
-  const client = new HighbridgeClient({ port: PORT, fetch: withOrigin(ORIGIN), origin: ORIGIN, storage: null });
-  await client.connect({ launch: false });
-  await assert.rejects(client._json('POST', '/scanner', { stamp: { position: 'top', user: 'CEO' } }), (err) => err.code === 'invalid_options');
+  assert.equal(plain.documents[0].provenance.scanId, plain.scanId);
 });
 
 test('e2e: barcode scan returns rotated codes from the mock barcode sheet', { skip: !DLL && 'set HIGHBRIDGE_DEVHOST_DLL' }, async () => {

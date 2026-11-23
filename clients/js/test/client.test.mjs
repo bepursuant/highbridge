@@ -29,7 +29,7 @@ class FakeApp {
     if (method === 'POST' && pathname === '/pair') { this.paired = true; this.reapprove = false; return json(200, { paired: true }); }
     if (!this.paired) return json(403, { error: 'origin_not_paired', message: 'Pair first.' });
     if (method === 'GET' && pathname === '/scanner') return json(200, { scanners: [{ id: 'mock-feeder', name: 'Mock', backend: 'mock', isDefault: true }] });
-    if (method === 'POST' && pathname === '/scanner' && this.reapprove && JSON.parse(init.body ?? '{}').stamp) {
+    if (method === 'POST' && pathname === '/scanner' && this.reapprove) {
       return json(403, { error: 'approval_required', message: 'Approve this site again.' });
     }
     if (method === 'POST' && pathname === '/scanner') {
@@ -123,11 +123,11 @@ class FakeApp {
         size: 4,
         pageCount: 1,
         url: `/scanner/${job.id}/documents/0`,
-        ...(job.options.stamp ? { provenance: { scanId: 'PT-AAAA-BBBB', page: 1, pageCount: 1 } } : {}),
+        ...(done ? { provenance: { scanId: 'PT-AAAA-BBBB', page: 1, pageCount: 1 } } : {}),
         ...(job.options.barcodes ? { barcodeStatus: 'done', barcodes: found } : {}),
       }] : [],
       pagesScanned: done ? 1 : 0,
-      ...(job.options.stamp ? { stamp: { position: job.options.stamp.position ?? 'bottom', requiredByPolicy: false, scanId: 'PT-AAAA-BBBB' } } : {}),
+      scanId: 'PT-AAAA-BBBB',
       ...(job.options.barcodes && done ? { barcodes: found } : {}),
       ...(typeof job.usedFeeder === 'boolean' ? { usedFeeder: job.usedFeeder } : {}),
     };
@@ -285,10 +285,8 @@ test('a stamp does not move barcode outlines', () => {
   assert.equal(barcodePointsOnImage(undefined, points), points);
 });
 
-test('buildScanUrl carries only the stamp position', () => {
-  assert.equal(new URL(buildScanUrl(ORIGIN, 'abc123abc123abc123', { stamp: { position: 'top' } })).searchParams.get('stamp'), 'top');
-  assert.equal(new URL(buildScanUrl(ORIGIN, 'abc123abc123abc123', { stamp: {} })).searchParams.get('stamp'), 'bottom');
-  assert.equal(new URL(buildScanUrl(ORIGIN, 'abc123abc123abc123', { stamp: null })).searchParams.has('stamp'), false);
+test('buildScanUrl does not carry a stamp', () => {
+  assert.equal(new URL(buildScanUrl(ORIGIN, 'abc123abc123abc123', { dpi: 200 })).searchParams.has('stamp'), false);
 });
 
 test('readCard returns the allowlisted fields and re-approves an old approval once', async () => {
@@ -445,12 +443,12 @@ test('readCardSession waits for removal and retries an empty reader', async () =
   assert.equal(failed.calls.filter((call) => call === 'POST /pcsc').length, 1);
 });
 
-test('stamped scan returns provenance and re-approves an old approval once', async () => {
+test('every scan returns provenance and re-approves an old approval once', async () => {
   const app = new FakeApp({ paired: true, reapprove: true });
 
-  const result = await client(app).scan({ stamp: { position: 'top' } });
+  const result = await client(app).scan();
 
   assert.deepEqual(app.calls.filter((c) => c.startsWith('POST')), ['POST /scanner', 'POST /pair', 'POST /scanner']);
-  assert.deepEqual(result.stamp, { position: 'top', requiredByPolicy: false, scanId: 'PT-AAAA-BBBB' });
+  assert.equal(result.scanId, 'PT-AAAA-BBBB');
   assert.equal(result.documents[0].provenance.scanId, 'PT-AAAA-BBBB');
 });

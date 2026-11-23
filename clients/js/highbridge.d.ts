@@ -6,17 +6,7 @@ export type ScanStatus = 'queued' | 'scanning' | 'completed' | 'failed' | 'cance
 /** Only 'png' (one stacked document) today. */
 export type OutputFormat = 'png';
 
-export type StampPosition = 'top' | 'bottom';
-
-/**
- * Asks highbridge to attach its provenance record to each finished document. The page can only
- * choose the position, which is stored for a later visible stamp. Policy may also require the stamp.
- */
-export interface StampOptions {
-  position?: StampPosition;
-}
-
-/** Embedded in the PNG (iTXt "highbridge:provenance") and returned here. The image is unchanged. */
+/** Embedded in the PNG (iTXt "highbridge:provenance") and returned on every document. The image is unchanged. */
 export interface PageProvenance {
   version: 1;
   /** Made by highbridge for the whole scan, e.g. "HB-7K3M-9QX2". */
@@ -34,15 +24,7 @@ export interface PageProvenance {
   /** SHA-256 of the document pixels (canonical pixels, see hashMethod). */
   originalSha256: string;
   hashMethod: 'highbridge-pixels-v1';
-  /** Stored for a later visible stamp. The PNG pixels are not changed. */
-  position: StampPosition;
   software: string;
-}
-
-export interface StampInfo {
-  position: StampPosition;
-  requiredByPolicy: boolean;
-  scanId: string;
 }
 
 export interface ScanOptions {
@@ -62,10 +44,9 @@ export interface ScanOptions {
    * returns both sides. A flatbed stays one shot. `scanSession` repeats while this is above zero.
    */
   maxSheets?: number;
-  /** Clockwise turn applied to each page before stacking, stamping, or barcode search. */
+  /** Clockwise turn given to the scanner before the page is stacked or searched for barcodes. */
   orientation?: 0 | 90 | 180 | 270;
   format?: OutputFormat;
-  stamp?: StampOptions | null;
   /** Find barcodes on every finished document. */
   barcodes?: boolean;
   /** Formats to look for (needs `barcodes: true`); default: every format except aztec, code93 and codabar. */
@@ -128,7 +109,7 @@ export interface DocumentInfo {
   url: string;
   /** How many pages were stacked into this file. */
   pageCount: number;
-  /** Only on a stamped document. */
+  /** Present once the document is finished. */
   provenance?: PageProvenance;
   /** Only when the scan asked for barcodes. */
   barcodeStatus?: BarcodeStatus;
@@ -146,7 +127,8 @@ export interface ScanJob {
   documents: DocumentInfo[];
   /** Pages received from the scanner so far. Documents appear once they are stacked. */
   pagesScanned: number;
-  stamp?: StampInfo;
+  /** Short id embedded in every document of this scan. */
+  scanId: string;
   /** Every document's barcodes in document order; only when the scan asked for barcodes. */
   barcodes?: Barcode[];
   /** False when the scanner did not use the feeder. */
@@ -155,8 +137,9 @@ export interface ScanJob {
 
 export interface ScanResult {
   id: string;
+  /** Short id embedded in every document of this scan. */
+  scanId: string;
   documents: Array<DocumentInfo & { blob: Blob }>;
-  stamp?: StampInfo;
   /** Every document's barcodes in document order; only when the scan asked for barcodes. */
   barcodes?: Barcode[];
   /** False when the scanner did not use the feeder. `scanSession` stops when this is false. */

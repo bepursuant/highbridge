@@ -1,46 +1,4 @@
-using System.Text.Json.Serialization;
-
 namespace Highbridge.Provenance;
-
-[JsonConverter(typeof(CamelCaseEnumConverter<StampPosition>))]
-public enum StampPosition
-{
-    Bottom,
-    Top,
-}
-
-/// <summary>
-/// What a web page may say about the provenance stamp: only where a future visible stamp would go.
-/// Every value in the record comes from highbridge, so unknown members (such as text) are rejected.
-/// </summary>
-[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-[System.ComponentModel.TypeConverter(typeof(System.ComponentModel.ExpandableObjectConverter))]
-public sealed record StampOptions
-{
-    public StampPosition Position { get; set; } = StampPosition.Bottom;
-}
-
-[JsonConverter(typeof(CamelCaseEnumConverter<StampMode>))]
-public enum StampMode
-{
-    /// <summary>The page decides whether to stamp (default).</summary>
-    Optional,
-
-    /// <summary>Every scan is stamped, whatever the page asks.</summary>
-    Required,
-
-    /// <summary>Stamp requests are rejected with <c>stamp_disabled</c>.</summary>
-    Disabled,
-}
-
-/// <summary><c>provenanceStamp</c> in policy.json.</summary>
-public sealed class ProvenanceStampPolicy
-{
-    public StampMode Mode { get; set; } = StampMode.Optional;
-
-    /// <summary>When set, overrides the position the page asks for.</summary>
-    public StampPosition? Position { get; set; }
-}
 
 /// <summary>Who and where a scan was made. Read by highbridge from Windows, never from the page.</summary>
 public sealed record ProvenanceIdentity(string Workstation, string User)
@@ -50,7 +8,7 @@ public sealed record ProvenanceIdentity(string Workstation, string User)
 }
 
 /// <summary>
-/// The provenance of one stamped document. Embedded in the file (for a PNG, iTXt
+/// The provenance of one document. Embedded in the file (for a PNG, iTXt
 /// <c>highbridge:provenance</c>) and returned to the page. The image itself is not changed.
 /// </summary>
 public sealed record PageProvenance
@@ -90,9 +48,6 @@ public sealed record PageProvenance
     public required string OriginalSha256 { get; init; }
 
     public string HashMethod { get; init; } = PixelHashMethod;
-
-    /// <summary>Where a future visible stamp would sit. The PNG itself is not changed.</summary>
-    public required StampPosition Position { get; init; }
 
     public required string Software { get; init; }
 }

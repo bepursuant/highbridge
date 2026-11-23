@@ -191,7 +191,7 @@ public static class HighbridgeServer
 
     /// <summary>
     /// Paired with the current approval wording. A site approved under older wording is asked
-    /// again, so the user sees the card fields and the stamp identity sentence.
+    /// again, so the user sees the card fields and that every scan includes their name.
     /// </summary>
     private static bool IsApproved(HighbridgeRuntime runtime, string origin) =>
         runtime.Origins.IsPaired(origin) && runtime.Origins.ApprovalCoversIdentity(origin);

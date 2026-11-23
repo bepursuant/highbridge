@@ -25,18 +25,15 @@ public class ProvenanceStamperTests
         Page = 1,
         PageCount = 3,
         OriginalSha256 = string.Empty,
-        Position = StampPosition.Bottom,
         Software = "highbridge test",
     };
 
-    [Theory]
-    [InlineData(StampPosition.Bottom)]
-    [InlineData(StampPosition.Top)]
-    public void Leaves_the_image_unchanged_and_writes_metadata(StampPosition position)
+    [Fact]
+    public void Leaves_the_image_unchanged_and_writes_metadata()
     {
         byte[] original = ColorPage(400, 300, dpi: 150);
 
-        var stamped = ProvenanceStamper.Stamp(original, Record with { Position = position });
+        var stamped = ProvenanceStamper.Stamp(original, Record);
 
         var before = PngDecoder.Decode(original);
         var after = PngDecoder.Decode(stamped.Png);
@@ -44,7 +41,6 @@ public class ProvenanceStamperTests
         Assert.Equal((stamped.Width, stamped.Height), (after.Width, after.Height));
         Assert.Equal(3, after.Channels);
         Assert.Equal(150, after.Dpi);
-        Assert.Equal(position, stamped.Provenance.Position);
 
         var a = new byte[400 * 3];
         var b = new byte[400 * 3];
@@ -91,11 +87,11 @@ public class ProvenanceStamperTests
     {
         byte[] original = ColorPage(300, 200, dpi: 200);
 
-        var bottom = ProvenanceStamper.Stamp(original, Record);
-        var top = ProvenanceStamper.Stamp(original, Record with { Position = StampPosition.Top, Page = 2 });
+        var first = ProvenanceStamper.Stamp(original, Record);
+        var second = ProvenanceStamper.Stamp(original, Record with { Page = 2 });
 
-        Assert.Equal(bottom.Provenance.OriginalSha256, top.Provenance.OriginalSha256);
-        Assert.NotEqual(bottom.Provenance.OriginalSha256, ProvenanceStamper.Stamp(ColorPage(300, 200, 200, seed: 2), Record).Provenance.OriginalSha256);
+        Assert.Equal(first.Provenance.OriginalSha256, second.Provenance.OriginalSha256);
+        Assert.NotEqual(first.Provenance.OriginalSha256, ProvenanceStamper.Stamp(ColorPage(300, 200, 200, seed: 2), Record).Provenance.OriginalSha256);
     }
 
     [Fact]
@@ -159,7 +155,7 @@ public class ProvenanceJobTests
         using var runtime = Runtime(time: time);
         runtime.Origins.Pair(Origin);
 
-        var job = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Stamp = new StampOptions() }, ScanTrigger.Api);
+        var job = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder }, ScanTrigger.Api);
         await job.Finished.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.Equal(ScanJobStatus.Completed, job.Status);
@@ -180,63 +176,18 @@ public class ProvenanceJobTests
     }
 
     [Fact]
-    public async Task Unstamped_scans_carry_no_identity()
-    {
-        using var runtime = Runtime();
-        runtime.Origins.Pair(Origin);
-
-        var job = runtime.Jobs.Start(Origin, new ScanOptions(), ScanTrigger.Api);
-        await job.Finished.WaitAsync(TimeSpan.FromSeconds(10));
-
-        Assert.Null(job.Stamp);
-        Assert.Null(job.ScanId);
-        Assert.All(job.Documents, p => Assert.Null(p.Provenance));
-        Assert.All(job.Documents, p => Assert.Empty(PngEncoder.ReadText(p.Data)));
-    }
-
-    [Fact]
-    public async Task Policy_can_require_the_stamp_and_force_its_position()
-    {
-        var policy = new HighbridgePolicy { ProvenanceStamp = new ProvenanceStampPolicy { Mode = StampMode.Required, Position = StampPosition.Top } };
-        using var runtime = Runtime(policy);
-        runtime.Settings.Update(s => s.PairedOrigins.Add(new PairedOrigin { Origin = Origin }));
-
-        var job = runtime.Jobs.Start(Origin, new ScanOptions { Stamp = new StampOptions { Position = StampPosition.Bottom } }, ScanTrigger.Api);
-        await job.Finished.WaitAsync(TimeSpan.FromSeconds(10));
-        var unrequested = runtime.Jobs.Start(Origin, new ScanOptions(), ScanTrigger.Api);
-        await unrequested.Finished.WaitAsync(TimeSpan.FromSeconds(10));
-
-        Assert.True(job.StampRequiredByPolicy);
-        Assert.All(job.Documents.Concat(unrequested.Documents), p => Assert.Equal(StampPosition.Top, p.Provenance!.Position));
-    }
-
-    [Fact]
-    public void Policy_can_disable_the_stamp()
-    {
-        using var runtime = Runtime(new HighbridgePolicy { ProvenanceStamp = new ProvenanceStampPolicy { Mode = StampMode.Disabled } });
-        runtime.Origins.Pair(Origin);
-
-        var ex = Assert.Throws<JobRejectedException>(() => runtime.Jobs.Start(Origin, new ScanOptions { Stamp = new StampOptions() }, ScanTrigger.Api));
-
-        Assert.Equal("stamp_disabled", ex.Code);
-        Assert.Null(runtime.Jobs.Start(Origin, new ScanOptions(), ScanTrigger.Api).Stamp);
-    }
-
-    [Fact]
     public void Sites_approved_before_the_identity_wording_must_approve_again()
     {
         using var runtime = Runtime(new HighbridgePolicy { AllowedOrigins = ["https://admin.example.com"] });
         runtime.Settings.Update(s => s.PairedOrigins.Add(new PairedOrigin { Origin = Origin, PairedAt = DateTimeOffset.UnixEpoch }));
-        var stamped = new ScanOptions { Stamp = new StampOptions() };
 
-        Assert.Equal("approval_required", Assert.Throws<JobRejectedException>(() => runtime.Jobs.Start(Origin, stamped, ScanTrigger.Api)).Code);
-        Assert.NotNull(runtime.Jobs.Start(Origin, new ScanOptions(), ScanTrigger.Api));
-        Assert.NotNull(runtime.Jobs.Start("https://admin.example.com", stamped, ScanTrigger.Api).Stamp);
+        Assert.Equal("approval_required", Assert.Throws<JobRejectedException>(() => runtime.Jobs.Start(Origin, new ScanOptions(), ScanTrigger.Api)).Code);
+        Assert.NotNull(runtime.Jobs.Start("https://admin.example.com", new ScanOptions(), ScanTrigger.Api).ScanId);
 
         runtime.Origins.Pair(Origin);
         Assert.Equal(OriginRegistry.CurrentApprovalVersion, runtime.Origins.ListUserPairings().Single().ApprovalVersion);
         Assert.Equal(DateTimeOffset.UnixEpoch, runtime.Origins.ListUserPairings().Single().PairedAt);
-        Assert.NotNull(runtime.Jobs.Start(Origin, stamped, ScanTrigger.Api).Stamp);
+        Assert.False(string.IsNullOrEmpty(runtime.Jobs.Start(Origin, new ScanOptions(), ScanTrigger.Api).ScanId));
     }
 
     [Fact]
@@ -246,7 +197,7 @@ public class ProvenanceJobTests
         using var runtime = Runtime(scannerBackend: backend);
         runtime.Origins.Pair(Origin);
 
-        var job = runtime.Jobs.Start(Origin, new ScanOptions { Stamp = new StampOptions() }, ScanTrigger.Api);
+        var job = runtime.Jobs.Start(Origin, new ScanOptions(), ScanTrigger.Api);
         await backend.FirstPageDelivered.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.Equal(1, job.PagesScanned);
@@ -266,7 +217,7 @@ public class ProvenanceJobTests
         using var runtime = Runtime(scannerBackend: new GatedBackend(pageData: [1, 2, 3], released: true));
         runtime.Origins.Pair(Origin);
 
-        var job = runtime.Jobs.Start(Origin, new ScanOptions { Stamp = new StampOptions() }, ScanTrigger.Api);
+        var job = runtime.Jobs.Start(Origin, new ScanOptions(), ScanTrigger.Api);
         await job.Finished.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.Equal(ScanJobStatus.Failed, job.Status);
@@ -275,30 +226,24 @@ public class ProvenanceJobTests
     }
 
     [Fact]
-    public void Protocol_urls_carry_only_the_stamp_position()
+    public void Protocol_urls_do_not_carry_a_stamp()
     {
-        string url = HighbridgeUri.BuildScan(Origin, ScanJobManager.NewId(), new ScanOptions { Stamp = new StampOptions { Position = StampPosition.Top } });
-        Assert.Contains("&stamp=top", url);
-        Assert.True(HighbridgeUri.TryParse(url, out var command, out _));
-        Assert.Equal(StampPosition.Top, command!.Options.Stamp!.Position);
-
-        Assert.DoesNotContain("stamp", HighbridgeUri.BuildScan(Origin, ScanJobManager.NewId(), new ScanOptions()));
-        Assert.True(HighbridgeUri.TryParse("highbridge://scan?v=1&origin=https%3A%2F%2Fa.example&request=0123456789abcdef&stamp=BOTTOM", out command, out _));
-        Assert.Equal(StampPosition.Bottom, command!.Options.Stamp!.Position);
-        Assert.False(HighbridgeUri.TryParse("highbridge://scan?v=1&origin=https%3A%2F%2Fa.example&request=0123456789abcdef&stamp=Signed+by+CEO", out _, out string? error));
-        Assert.Contains("stamp", error);
+        string url = HighbridgeUri.BuildScan(Origin, ScanJobManager.NewId(), new ScanOptions());
+        Assert.DoesNotContain("stamp", url);
+        Assert.True(HighbridgeUri.TryParse(url, out _, out _));
+        Assert.True(HighbridgeUri.TryParse("highbridge://scan?v=1&origin=https%3A%2F%2Fa.example&request=0123456789abcdef&stamp=top", out _, out _));
+        Assert.True(HighbridgeUri.TryParse("highbridge://scan?v=1&origin=https%3A%2F%2Fa.example&request=0123456789abcdef&stamp=Signed+by+CEO", out _, out _));
     }
 
     [Fact]
-    public void Policy_file_reads_the_stamp_settings()
+    public void An_old_policy_file_with_a_stamp_setting_still_loads()
     {
         string path = Path.GetTempFileName();
         try
         {
-            File.WriteAllText(path, """{"provenanceStamp": {"mode": "required", "position": "top"}}""");
+            File.WriteAllText(path, """{"provenanceStamp": {"mode": "disabled", "position": "top"}, "cardReader": {"mode": "disabled"}}""");
             var policy = HighbridgePolicy.Load(path);
-            Assert.Equal(StampMode.Required, policy.ProvenanceStamp!.Mode);
-            Assert.Equal(StampPosition.Top, policy.ProvenanceStamp.Position);
+            Assert.False(policy.CardReaderEnabled);
         }
         finally
         {

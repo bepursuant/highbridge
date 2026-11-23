@@ -9,21 +9,18 @@ namespace Highbridge.Provenance;
 public sealed record ReceivedPage(ScannedPage Page, DateTimeOffset ReceivedAt);
 
 /// <summary>
-/// Applies the stamp policy to scan requests and stamps finished jobs. All provenance values come
-/// from here (identity, clock, scanner, verified origin); the page only picks on/off and position.
+/// Writes provenance onto every finished document. All values come from here (identity, clock,
+/// scanner, verified origin). The page cannot turn it off or supply its own.
 /// </summary>
 public sealed class ProvenanceStamping
 {
     private const string Crockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
-    public ProvenanceStamping(ProvenanceStampPolicy? policy = null, ProvenanceIdentity? identity = null, string? software = null)
+    public ProvenanceStamping(ProvenanceIdentity? identity = null, string? software = null)
     {
-        Policy = policy ?? new ProvenanceStampPolicy();
         Identity = identity ?? ProvenanceIdentity.FromEnvironment();
         Software = software ?? DefaultSoftware;
     }
-
-    public ProvenanceStampPolicy Policy { get; }
 
     public ProvenanceIdentity Identity { get; }
 
@@ -31,37 +28,6 @@ public sealed class ProvenanceStamping
 
     private static string DefaultSoftware { get; } =
         "highbridge " + (typeof(ProvenanceStamping).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0] ?? "0.0.0");
-
-    /// <summary>
-    /// The stamp a scan gets, or null for none. Throws <see cref="JobRejectedException"/> when the
-    /// policy disables stamping or the site's approval does not cover sending the user's identity.
-    /// </summary>
-    /// <param name="identityApproved">The site's approval (or the admin's policy) covers user and computer names.</param>
-    public StampOptions? Resolve(StampOptions? requested, bool identityApproved, out bool requiredByPolicy)
-    {
-        requiredByPolicy = Policy.Mode == StampMode.Required;
-        if (Policy.Mode == StampMode.Disabled)
-        {
-            return requested is null
-                ? null
-                : throw new JobRejectedException("stamp_disabled", "Your administrator has turned off provenance stamps.");
-        }
-
-        if (requested is null && !requiredByPolicy)
-        {
-            return null;
-        }
-
-        if (!requiredByPolicy && !identityApproved)
-        {
-            throw new JobRejectedException(
-                "approval_required",
-                "Stamped scans include your Windows user name and computer name. Approve this site again (POST /pair) to allow that.");
-        }
-
-        var stamp = requested ?? new StampOptions();
-        return Policy.Position is { } forced ? stamp with { Position = forced } : stamp;
-    }
 
     /// <summary>40 random bits as <c>HB-XXXX-XXXX</c> (Crockford base32: no I, L, O or U).</summary>
     public static string NewScanId()
@@ -78,7 +44,6 @@ public sealed class ProvenanceStamping
     /// <summary>Stamps each finished document once. Page numbers are the document's place in the scan.</summary>
     public IReadOnlyList<ScannedPage> StampAll(
         IReadOnlyList<ReceivedPage> pages,
-        StampOptions stamp,
         string origin,
         string scanId,
         string scannerFallback,
@@ -106,7 +71,6 @@ public sealed class ProvenanceStamping
                 Page = i + 1,
                 PageCount = pages.Count,
                 OriginalSha256 = string.Empty,
-                Position = stamp.Position,
                 Software = Software,
             };
 
@@ -117,7 +81,7 @@ public sealed class ProvenanceStamping
             }
             catch (Exception ex) when (ex is InvalidDataException or NotSupportedException or EndOfStreamException)
             {
-                throw new ScannerException("stamp_failed", "highbridge could not add the provenance stamp, so no pages were returned.", ex);
+                throw new ScannerException("stamp_failed", "highbridge could not add the provenance record, so no pages were returned.", ex);
             }
 
             stamped.Add(page.Stamped(result.Png, result.Width, result.Height, result.Provenance));

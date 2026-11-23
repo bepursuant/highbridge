@@ -48,7 +48,7 @@ public sealed class HighbridgeRuntime : IDisposable
             Origins,
             time,
             logger: loggerFactory.CreateLogger<ScanJobManager>(),
-            provenance: new ProvenanceStamping(policy.ProvenanceStamp, identity),
+            provenance: new ProvenanceStamping(identity),
             barcodeWorker: barcodeWorker);
         CardReads = new CardReadManager(cardReaderBackend, Origins, policy, time, logger: loggerFactory.CreateLogger<CardReadManager>());
         Logger = loggerFactory.CreateLogger<HighbridgeRuntime>();

@@ -124,7 +124,6 @@ export class HighbridgeClient {
    *   maxSheets (0 = no limit; a positive value stops the feeder after that many sheets and keeps the session armed),
    *   orientation (0, 90, 180, or 270, applied to each page before stacking),
    *   showDriverUi, format ('png'),
-   *   stamp ({ position: 'top'|'bottom' } writes highbridge's provenance record into the document; the image is unchanged),
    *   barcodes (true to find barcodes on each finished document: `barcodeStatus` and `barcodes`, and the result a flat `barcodes`),
    *   barcodeFormats (e.g. ['qrCode', 'code128']; default: all common formats)
    * @param {object} [hooks]
@@ -168,8 +167,7 @@ export class HighbridgeClient {
       job.documents.map(async (document) => ({ ...document, blob: await this._blob(document.url) })),
     );
     this._json('DELETE', `/scanner/${job.id}`).catch(() => {});
-    const result = { id: job.id, documents };
-    if (job.stamp) result.stamp = job.stamp;
+    const result = { id: job.id, scanId: job.scanId, documents };
     if (job.barcodes) result.barcodes = job.barcodes;
     if (typeof job.usedFeeder === 'boolean') result.usedFeeder = job.usedFeeder;
     return result;
@@ -336,7 +334,7 @@ export class HighbridgeClient {
     try {
       return await this._json('POST', '/scanner', options);
     } catch (err) {
-      // Stamped scans send the user's name and computer name; sites approved before highbridge
+      // Every scan sends the user's name and computer name; sites approved before highbridge
       // said so are asked once more.
       if (err.code !== 'approval_required') throw err;
       await this.pair();
@@ -500,7 +498,6 @@ export function buildScanUrl(origin, requestId, options = {}) {
   for (const key of ['scannerId', 'dpi', 'colorMode', 'source', 'duplex', 'showDriverUi', 'maxPagesPerDocument', 'maxSheets', 'orientation', 'format']) {
     if (options[key] !== undefined && options[key] !== null) params.set(key, String(options[key]));
   }
-  if (options.stamp) params.set('stamp', options.stamp.position ?? 'bottom');
   if (options.barcodes) params.set('barcodes', 'true');
   if (Array.isArray(options.barcodeFormats)) params.set('barcodeFormats', options.barcodeFormats.join(','));
   return `highbridge://scan?${params}`;
@@ -556,7 +553,6 @@ const SCAN_FIELDS = [
   ['max-sheets', 'maxSheets', 'number'],
   ['orientation', 'orientation', 'number'],
   ['format', 'format'],
-  ['stamp', 'stamp', 'stamp'],
   ['barcodes', 'barcodes', 'bool'],
   ['barcode-formats', 'barcodeFormats', 'list'],
 ];
@@ -582,8 +578,6 @@ export function optionsFromAttributes(element, fields) {
     } else if (kind === 'number') {
       const value = Number(raw);
       if (Number.isFinite(value)) options[key] = value;
-    } else if (kind === 'stamp') {
-      options[key] = { position: raw };
     } else if (kind === 'list') {
       options[key] = raw.split(',').map((part) => part.trim()).filter(Boolean);
     } else {
@@ -643,11 +637,6 @@ function defineDeviceElements() {
             <label><input type="radio" name="color" value="gray" /><span>Grayscale</span></label>
             <label><input type="radio" name="color" value="blackWhite" /><span>Black &amp; white</span></label>
           </fieldset>
-          <fieldset class="field segmented"><legend>Provenance stamp</legend>
-            <label><input type="radio" name="stamp" value="" checked /><span>Device default</span></label>
-            <label><input type="radio" name="stamp" value="top" /><span>Top</span></label>
-            <label><input type="radio" name="stamp" value="bottom" /><span>Bottom</span></label>
-          </fieldset>
           <p class="hint">A field left on device default uses the value saved for this scanner. A value chosen here is sent and wins.</p>
           <label class="check"><input type="checkbox" data-duplex /> Scan both sides (duplex)</label>
           <label class="field"><span>Pages per document</span>
@@ -706,9 +695,6 @@ function defineDeviceElements() {
       const color = this.getAttribute('color-mode') ?? '';
       const colorInput = this.querySelector(`input[name="color"][value="${color}"]`);
       if (colorInput) colorInput.checked = true;
-      const stamp = this.getAttribute('stamp') ?? '';
-      const stampInput = this.querySelector(`input[name="stamp"][value="${stamp}"]`);
-      if (stampInput) stampInput.checked = true;
       this.querySelector('[data-duplex]').checked = this.hasAttribute('duplex') && this.getAttribute('duplex') !== 'false';
       this.querySelector('[data-driver-ui]').checked = this.hasAttribute('show-driver-ui') && this.getAttribute('show-driver-ui') !== 'false';
       this.querySelector('[data-barcodes]').checked = this.hasAttribute('barcodes') && this.getAttribute('barcodes') !== 'false';
@@ -722,7 +708,6 @@ function defineDeviceElements() {
       set('source', this.querySelector('[data-source]').value);
       set('orientation', this.querySelector('[data-orientation]').value);
       set('color-mode', this.querySelector('input[name="color"]:checked')?.value);
-      set('stamp', this.querySelector('input[name="stamp"]:checked')?.value);
       set('duplex', this.querySelector('[data-duplex]').checked);
       set('show-driver-ui', this.querySelector('[data-driver-ui]').checked);
       set('barcodes', this.querySelector('[data-barcodes]').checked);

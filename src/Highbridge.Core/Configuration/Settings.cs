@@ -1,7 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
-using Highbridge.Provenance;
 
 namespace Highbridge.Configuration;
 
@@ -23,7 +22,7 @@ public sealed class PairedOrigin
     public DateTimeOffset PairedAt { get; set; }
 
     /// <summary>
-    /// Which approval wording the user accepted. Version 2 tells the user that stamped scans send
+    /// Which approval wording the user accepted. Version 2 tells the user that scans send
     /// their Windows user name and computer name. Version 3 tells them a card read sends the last
     /// four digits, the expiry, and the cardholder name. Version 4 tells them the full card number
     /// is sent to the site over the local connection. Missing means an older approval.
@@ -61,9 +60,6 @@ public sealed class HighbridgePolicy
 
     /// <summary>Accept http://localhost and http://127.0.0.1 pages (development). Default true.</summary>
     public bool? AllowInsecureLoopbackOrigins { get; set; }
-
-    /// <summary>Provenance stamp rules; for example <c>{"mode": "required"}</c> stamps every scan.</summary>
-    public ProvenanceStampPolicy? ProvenanceStamp { get; set; }
 
     /// <summary>
     /// Card reader switch. <c>{"mode": "disabled"}</c> makes card routes fail with

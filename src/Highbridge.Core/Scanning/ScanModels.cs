@@ -94,9 +94,6 @@ public sealed record ScanOptions
 
     public OutputFormat Format { get; set; } = OutputFormat.Png;
 
-    /// <summary>Attach a provenance record to each document; null means no stamp (unless policy requires one).</summary>
-    public StampOptions? Stamp { get; set; }
-
     /// <summary>Find barcodes on each finished document; see <see cref="Highbridge.Barcodes.BarcodeDetector"/>.</summary>
     public bool Barcodes { get; set; }
 
@@ -146,11 +143,6 @@ public sealed record ScanOptions
         if (!Enum.IsDefined(Format))
         {
             errors.Add("format is not supported.");
-        }
-
-        if (Stamp is not null && !Enum.IsDefined(Stamp.Position))
-        {
-            errors.Add("stamp.position must be top or bottom.");
         }
 
         errors.AddRange(BarcodeFormatSet.Validate(Barcodes, BarcodeFormats));

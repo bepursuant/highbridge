@@ -129,7 +129,7 @@ public sealed class ScannerModule : IDeviceModule
 
 public sealed record ScannersResponse(IReadOnlyList<ScannerInfo> Scanners);
 
-/// <param name="Provenance">Only on a stamped document.</param>
+/// <param name="Provenance">Written into every finished document.</param>
 /// <param name="BarcodeStatus">Only when the scan asked for barcodes, like <paramref name="Barcodes"/>.</param>
 /// <param name="PageCount">How many pages were stacked into this file.</param>
 public sealed record DocumentResponse(
@@ -144,9 +144,6 @@ public sealed record DocumentResponse(
     BarcodeStatus? BarcodeStatus = null,
     IReadOnlyList<BarcodeResult>? Barcodes = null);
 
-/// <summary>The stamp a job actually gets, after policy.</summary>
-public sealed record StampResponse(StampPosition Position, bool RequiredByPolicy, string ScanId);
-
 /// <param name="Barcodes">Every document's barcodes in one list; only when the scan asked for barcodes.</param>
 public sealed record ScanJobResponse(
     string Id,
@@ -159,7 +156,8 @@ public sealed record ScanJobResponse(
     IReadOnlyList<DocumentResponse> Documents,
     IReadOnlyList<BarcodeResult>? Barcodes = null)
 {
-    public StampResponse? Stamp { get; init; }
+    /// <summary>Short id embedded in every document of this scan.</summary>
+    public string ScanId { get; init; } = "";
 
     /// <summary>Pages received from the scanner so far. Documents appear once they are stacked.</summary>
     public int PagesScanned { get; init; }
@@ -178,7 +176,7 @@ public sealed record ScanJobResponse(
         job.Documents.Select(document => WithBarcodes(new DocumentResponse(document.Index, document.MediaType, document.Width, document.Height, document.Data.Length, $"/scanner/{job.Id}/documents/{document.Index}", document.PageCount, document.Provenance), job.Barcodes)).ToArray(),
         job.Barcodes?.All)
     {
-        Stamp = job.Stamp is { } stamp ? new StampResponse(stamp.Position, job.StampRequiredByPolicy, job.ScanId!) : null,
+        ScanId = job.ScanId,
         PagesScanned = job.PagesScanned,
         UsedFeeder = job.UsedFeeder,
     };

@@ -57,7 +57,7 @@ static class Hub
         Error(ex.Code switch
         {
             "too_many_jobs" => StatusCodes.Status429TooManyRequests,
-            "approval_required" or "stamp_disabled" or "card_reader_disabled" => StatusCodes.Status403Forbidden,
+            "approval_required" or "card_reader_disabled" => StatusCodes.Status403Forbidden,
             _ => StatusCodes.Status400BadRequest,
         }, ex.Code, ex.Message);
 
