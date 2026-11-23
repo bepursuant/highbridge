@@ -232,9 +232,7 @@ public class ScanJobManagerTests
         Assert.Equal(2, Assert.Single(second.Documents).PageCount);
 
         var waiting = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, MaxSheets = 1 }, ScanTrigger.Api);
-        await Task.Delay(80);
-        Assert.False(waiting.IsFinished);
-        Assert.Equal(ScanJobStatus.Scanning, waiting.Status);
+        await WaitUntilScanning(waiting);
 
         mock.LoadSheets(1);
         await waiting.Finished.WaitAsync(TimeSpan.FromSeconds(5));
@@ -250,8 +248,7 @@ public class ScanJobManagerTests
         runtime.Origins.Pair(Origin);
 
         var job = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, MaxSheets = 1 }, ScanTrigger.Api);
-        await Task.Delay(80);
-        Assert.Equal(ScanJobStatus.Scanning, job.Status);
+        await WaitUntilScanning(job);
 
         mock.LoadSheets(1);
         await job.Finished.WaitAsync(TimeSpan.FromSeconds(5));
@@ -321,6 +318,22 @@ public class ScanJobManagerTests
         Assert.Equal(ScanJobStatus.Failed, job.Status);
         Assert.Equal("scan_timeout", job.ErrorCode);
         await backend.Canceled.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    /// <summary>
+    /// The scan task sets Scanning only after it takes the scan lock. A fixed sleep loses that race
+    /// when the runner is busy, so wait until the job is actually waiting on the feeder.
+    /// </summary>
+    private static async Task WaitUntilScanning(ScanJob job)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (job.Status == ScanJobStatus.Queued && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
+
+        Assert.Equal(ScanJobStatus.Scanning, job.Status);
+        Assert.False(job.IsFinished);
     }
 
     private sealed class HangingBackend : IScannerBackend
