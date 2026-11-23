@@ -66,13 +66,13 @@ Status: **alpha**. It is in testing and ready for production use on Windows 10/1
 | `duplex` | `false` | When `true`, a feeder returns both sides. The front and the back are two pages |
 | `showDriverUi` | `false` | When `true`, the vendor dialog is shown and highbridge does not force the other settings |
 | `maxPagesPerDocument` | `0` | `0` keeps every page in one PNG. `1`–`500` starts another document after that many pages |
-| `maxSheets` | `0` | `0` does not stop the feeder. `1`–`500` stops it after that many sheets. See below |
+| `maxSheets` | `0` | `0` keeps every sheet in the current document. `1`–`500` starts another document after that many sheets. The feeder still runs until it is empty |
 | `orientation` | `0` | `0`, `90`, `180`, or `270`, clockwise. Sent to the scanner as the sheet's orientation. highbridge does not rotate the image |
 | `format` | `png` | Only `png` is accepted. The field is there so a later format does not change the request shape |
 | `barcodes` | `false` | When `true`, each finished document is searched. The codes come back on that document |
 | `barcodeFormats` | the common set | Names such as `"qrCode"` and `"code128"`. Requires `barcodes: true`. On a link, `barcodeFormats=qrCode,code128` |
 
-**Feeder counting.** A flatbed is one shot. An empty feeder waits instead of failing the job. Duplex still returns both sides of each sheet. An image-counted driver (the Ambir nScan 690gt) is asked for `maxSheets` times the number of sides. A sheet-counted driver (PaperStream IP on the Ricoh fi-8170) is asked for `maxSheets` sheets, not that many images.
+**Feeder.** A flatbed is one shot. A feeder scan waits until there is paper, then takes every sheet. Duplex returns both sides of each sheet. `maxSheets` groups those pages into documents the same way `maxPagesPerDocument` does. It does not stop the feeder.
 
 ### Barcode results
 
@@ -98,7 +98,7 @@ The page names the reader, the interface, an optional application, and how long 
 
 ### Sessions
 
-`scanSession` and `readCardSession` in the JS client start from one click. They repeat the same POST and status poll until Stop or an error that needs a person. `scanSession` repeats while `maxSheets` is above zero and the scan used the feeder. A card session does not read again until that card has left the slot. The card number is only on the completed job. One scan runs at a time, and one card read runs at a time.
+`scanSession` and `readCardSession` in the JS client start from one click. They repeat the same POST and status poll until Stop or an error that needs a person. `scanSession` repeats while the scan used the feeder. Each cycle takes every sheet that is loaded. A card session does not read again until that card has left the slot. The card number is only on the completed job. One scan runs at a time, and one card read runs at a time.
 
 ### Provenance
 

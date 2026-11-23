@@ -14,7 +14,6 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Highbridge.Core.Tests" />
     <InternalsVisibleTo Include="Highbridge.Pcsc" />
-    <InternalsVisibleTo Include="Highbridge.Twain" />
   </ItemGroup>
 
 </Project>

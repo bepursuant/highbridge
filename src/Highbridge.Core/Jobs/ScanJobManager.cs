@@ -249,8 +249,8 @@ public sealed class ScanJobManager : IDisposable
         {
             job.SetStatus(ScanJobStatus.Scanning);
             // The empty-feeder wait is not part of the scan timeout: the job stays armed until
-            // someone loads paper or cancels. A flatbed does not wait. WIA-TWAIN often cannot
-            // answer CAP_FEEDERLOADED, so an enable that returns nothing is the same wait.
+            // someone loads paper or cancels. A flatbed does not wait. No pages from a feeder
+            // means it was empty.
             var received = new List<ReceivedPage>();
             IReadOnlyList<ScannedPage> pages;
             while (true)
@@ -259,18 +259,15 @@ public sealed class ScanJobManager : IDisposable
                     ? false
                     : await _scannerBackend.WaitForFeederAsync(job.Options, ct).ConfigureAwait(false);
 
-                try
+                received.Clear();
+                pages = await _scannerBackend.ScanAsync(job.Options, page => OnPage(job, page, received), ct).WaitAsync(_scanTimeout, _time, ct).ConfigureAwait(false);
+                if (pages.Count > 0 || job.UsedFeeder != true)
                 {
-                    received.Clear();
-                    pages = await _scannerBackend.ScanAsync(job.Options, page => OnPage(job, page, received), ct).WaitAsync(_scanTimeout, _time, ct).ConfigureAwait(false);
                     break;
                 }
-                catch (ScannerException ex) when (ex.Code == WiaFeeder.EmptyFeederCode)
-                {
-                    received.Clear();
-                    _logger.LogInformation("Scan {JobId} found an empty feeder; waiting for a sheet", job.Id);
-                    await Task.Delay(FeederRetryDelay, ct).ConfigureAwait(false);
-                }
+
+                _logger.LogInformation("Scan {JobId} found an empty feeder; waiting for a sheet", job.Id);
+                await Task.Delay(FeederRetryDelay, ct).ConfigureAwait(false);
             }
 
             if (pages.Count == 0)

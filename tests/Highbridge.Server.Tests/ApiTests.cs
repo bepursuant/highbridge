@@ -321,33 +321,19 @@ public sealed class ApiTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task One_sheet_returns_front_and_back_and_waits_when_the_feeder_is_empty()
+    public async Task A_feeder_scan_returns_every_sheet_and_maxSheets_splits_the_documents()
     {
         _runtime.Origins.Pair(Site);
-        var first = await FinishedOneSheet();
-        var second = await FinishedOneSheet();
-
-        Assert.Equal(Jobs.ScanJobStatus.Completed, first.Status);
-        Assert.Equal(2, Assert.Single(first.Documents).PageCount);
-        Assert.True(first.UsedFeeder);
-        Assert.Equal(2, Assert.Single(second.Documents).PageCount);
-
-        var create = Request(HttpMethod.Post, "/scanner", Site);
-        create.Content = JsonContent.Create(new { source = "feeder", duplex = true, maxSheets = 1 });
-        var third = await Json<ScanJobResponse>(await _http.SendAsync(create));
-        await Task.Delay(150);
-        var pending = await GetJson<ScanJobResponse>($"/scanner/{third.Id}", Site);
-        Assert.Null(pending.FinishedAt);
-        Assert.Equal(Jobs.ScanJobStatus.Scanning, pending.Status);
-        Assert.Equal(HttpStatusCode.NoContent, (await _http.SendAsync(Request(HttpMethod.Delete, $"/scanner/{third.Id}", Site))).StatusCode);
-    }
-
-    private async Task<ScanJobResponse> FinishedOneSheet()
-    {
         var create = Request(HttpMethod.Post, "/scanner", Site);
         create.Content = JsonContent.Create(new { source = "feeder", duplex = true, maxSheets = 1 });
         var created = await Json<ScanJobResponse>(await _http.SendAsync(create));
-        return await PollUntilFinished(created.Id, Site);
+        var job = await PollUntilFinished(created.Id, Site);
+
+        Assert.Equal(Jobs.ScanJobStatus.Completed, job.Status);
+        Assert.True(job.UsedFeeder);
+        Assert.Equal(4, job.PagesScanned);
+        Assert.Equal(2, job.Documents.Count);
+        Assert.All(job.Documents, document => Assert.Equal(2, document.PageCount));
     }
 
     private async Task StartAsync()

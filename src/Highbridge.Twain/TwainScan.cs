@@ -33,11 +33,6 @@ internal sealed class TwainScan
     private TwainSession? _session;
     private DataSource? _source;
     private NegotiatedScan _negotiated = new(XferMech.Native, true);
-    private CapabilityNegotiator? _negotiator;
-    private bool _oneSheetAtATime;
-    private int _imagesThisSheet = 1;
-    private int _pagesAtEnable;
-    private int _sheetsAccepted;
     private TWImageInfo? _pendingImage;
     private StripImageAssembler? _strips;
     private MemoryStream? _encodedStrips;
@@ -97,19 +92,7 @@ internal sealed class TwainScan
             }
 
             Progress("negotiating settings");
-            _negotiator = new CapabilityNegotiator(_source, _session, _logger);
-            _negotiated = _negotiator.Apply(_options);
-            // WIA-TigerType (the Samsung C460 over wireless WIA) returns at once when the ADF
-            // is empty, and if one enable is asked for every sheet it feeds two and then sits
-            // in the driver. Each enable is one sheet. PaperStream and the Ambir do not do this.
-            _oneSheetAtATime = WiaFeeder.ScanOneSheetAtATime(_source.Manufacturer, _source.ProductFamily, _source.Name)
-                && _negotiator.FeederIsActive(_options);
-            if (_oneSheetAtATime)
-            {
-                _imagesThisSheet = _negotiator.LimitToOneSheet(_options);
-                _logger.LogInformation("'{Source}' is scanned one sheet per enable. maxSheets {MaxSheets} (0 means the whole feeder)", _source.Name, _options.MaxSheets);
-            }
-
+            _negotiated = new CapabilityNegotiator(_source, _session, _logger).Apply(_options);
             EnableSource();
         }
         catch (Exception ex)
@@ -124,7 +107,7 @@ internal sealed class TwainScan
     {
         var mode = _options.ShowDriverUi ? SourceEnableMode.ShowUI : SourceEnableMode.NoUI;
         _driverWindow = _options.ShowDriverUi;
-        Progress(_sheetsAccepted == 0 ? "starting the scanner" : "starting the next sheet");
+        Progress("starting the scanner");
         var rc = _source!.Enable(mode, false, _thread.WindowHandle);
         _logger.LogInformation("MSG_ENABLEDS ({Mode}, parent window 0x{Window:X}) returned {ReturnCode}; TWAIN state {State}",
             mode, _thread.WindowHandle.ToInt64(), rc, _session?.State);
@@ -139,80 +122,7 @@ internal sealed class TwainScan
             throw new ScannerException("scan_not_started", $"'{_source.Name}' did not start scanning ({rc}).");
         }
 
-        Progress(_sheetsAccepted == 0
-            ? "waiting for the scanner to deliver the first page"
-            : "waiting for the scanner to deliver the next sheet");
-    }
-
-    /// <summary>
-    /// True when this disable was the end of one WIA sheet and the next step is already posted.
-    /// False when the job should complete with the pages it has, or fail with <see cref="_transferError"/>.
-    /// </summary>
-    private bool ContinueWiaFeeder()
-    {
-        if (_pages.Count == _pagesAtEnable && _pages.Count == 0
-            && _transferError is ScannerException scanner && scanner.Code != "no_paper")
-        {
-            return false;
-        }
-
-        bool loaded = true;
-        try
-        {
-            if (_negotiator is not null)
-            {
-                loaded = _negotiator.FeederIsLoaded();
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogInformation(ex, "Could not read CAP_FEEDERLOADED after the sheet; the next enable will see if paper remains");
-        }
-
-        switch (WiaFeeder.AfterEnable(_pagesAtEnable, _pages.Count, _sheetsAccepted, _options.MaxSheets, loaded))
-        {
-            case WiaFeeder.SheetStep.WaitForPaper:
-                _logger.LogInformation("The WIA feeder returned no pages; the job will wait for paper");
-                Fail(new ScannerException(WiaFeeder.EmptyFeederCode, "There is no paper in the feeder yet."));
-                _thread.Post(Shutdown);
-                return true;
-            case WiaFeeder.SheetStep.NextSheet:
-                _sheetsAccepted++;
-                _pagesAtEnable = _pages.Count;
-                _transferError = null;
-                _thread.Post(EnableNextSheet);
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    private void EnableNextSheet()
-    {
-        if (_shutDown || _result.Task.IsCompleted || _source is null || _negotiator is null)
-        {
-            return;
-        }
-
-        try
-        {
-            _imagesThisSheet = _negotiator.LimitToOneSheet(_options);
-            EnableSource();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "The next WIA sheet did not start");
-            if (_pages.Count > 0)
-            {
-                Complete();
-            }
-            else
-            {
-                Fail(ex);
-            }
-
-            Shutdown();
-        }
+        Progress("waiting for the scanner to deliver the first page");
     }
 
     /// <summary>Ends the scan from any thread: the caller gets <paramref name="reason"/> now; TWAIN is closed on its thread.</summary>
@@ -261,33 +171,6 @@ internal sealed class TwainScan
             _logger.LogInformation("The scan was already stopped; canceling the remaining transfers");
             e.CancelAll = true;
             return;
-        }
-
-        if (_oneSheetAtATime && !_negotiated.SheetCountedFeeder && _pages.Count >= _pagesAtEnable + _imagesThisSheet)
-        {
-            // The next TransferReady would be another sheet. Ending the enable here is what
-            // stops WIA from blocking inside that transfer. MSG_RESET is safe on this layer;
-            // it is not used for a sheet-counted PaperStream feeder.
-            _logger.LogInformation("WIA sheet is done ({Pages} page(s) this enable); ending it before the next sheet", _pages.Count - _pagesAtEnable);
-            e.CancelAll = true;
-            return;
-        }
-
-        if (_options.ImageLimit() is int limit && _pages.Count >= limit)
-        {
-            if (_negotiated.SheetCountedFeeder)
-            {
-                // MSG_RESET (CancelAll) aborts a sheet PaperStream has already picked and
-                // crashes the fi-8170. CAP_XFERCOUNT was set to one sheet, so this is only a
-                // stray image; it is dropped in AddPage and the feeder is left alone.
-                _logger.LogInformation("Reached {Limit} page(s). Not resetting the feeder; this driver crashes if a picked sheet is aborted", limit);
-            }
-            else
-            {
-                _logger.LogInformation("Reached {Limit} page(s); canceling the remaining transfers", limit);
-                e.CancelAll = true;
-                return;
-            }
         }
 
         try
@@ -368,11 +251,6 @@ internal sealed class TwainScan
         FinishMemoryPage();
         _logger.LogInformation("Source disabled (TWAIN state {State}, reason {Reason}): {Pages} page(s) in {Seconds:F1} s",
             _session?.State, _session?.DisableReason, _pages.Count, _clock.Elapsed.TotalSeconds);
-        if (_oneSheetAtATime && !_result.Task.IsCompleted && ContinueWiaFeeder())
-        {
-            return;
-        }
-
         Complete();
 
         // Close after NTwain has returned from this event, not inside it.
@@ -432,12 +310,6 @@ internal sealed class TwainScan
 
     private void AddPage(ScannedPage page)
     {
-        if (_negotiated.SheetCountedFeeder && _options.ImageLimit() is int limit && _pages.Count >= limit)
-        {
-            _logger.LogInformation("Ignoring page {Page}; the sheet limit is {Limit} image(s) and this feeder cannot be reset", _pages.Count + 1, limit);
-            return;
-        }
-
         _pages.Add(page);
         Progress($"received page {_pages.Count}");
         _logger.LogInformation("Page {Page}: {Width} x {Height} px, {Bytes} bytes {MediaType}", _pages.Count, page.Width, page.Height, page.Data.Length, page.MediaType);

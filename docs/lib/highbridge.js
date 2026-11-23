@@ -127,7 +127,7 @@ export class HighbridgeClient {
    * @param {'auto'|'flatbed'|'feeder'} [options.source]
    * @param {boolean} [options.duplex] feeder returns both sides; front and back are two pages
    * @param {number} [options.maxPagesPerDocument] 0 keeps every page in one PNG
-   * @param {number} [options.maxSheets] 0 does not stop the feeder; a positive value stops after that many sheets
+   * @param {number} [options.maxSheets] 0 keeps every sheet in the current document; a positive value starts another document after that many sheets. The feeder still runs until it is empty
    * @param {0|90|180|270} [options.orientation] clockwise sheet orientation, given to the scanner. highbridge does not rotate the image
    * @param {boolean} [options.showDriverUi]
    * @param {'png'} [options.format]
@@ -250,11 +250,9 @@ export class HighbridgeClient {
 
   /**
    * Arms a scan session: the same POST and status poll as {@link scan}, repeated until Stop,
-   * a flatbed (always one shot), or an error that needs a person. A feeder request waits while
-   * the feeder is empty, including when `maxSheets` is 0. With `maxSheets` above zero, each
-   * cycle stops after that many sheets and the session scans the next batch. `maxSheets` 0 is
-   * one scan of the whole feeder, once paper is loaded. Options are read again each cycle when
-   * `options` is a function. `pollIntervalMs` is unchanged.
+   * a flatbed (always one shot), or an error that needs a person. Each feeder cycle waits for
+   * paper, then scans until the feeder is empty. `maxSheets` only groups those pages into
+   * documents. Options are read again each cycle when `options` is a function. `pollIntervalMs` is unchanged.
    * @param {object|(() => object)} options
    * @param {object} [hooks]
    * @param {(result: object) => void} [hooks.onResult]
@@ -265,7 +263,7 @@ export class HighbridgeClient {
     for (;;) {
       if (signal?.aborted) return;
       const current = currentOptions(options);
-      const limitedFeeder = Number(current.maxSheets) > 0 && current.source !== 'flatbed';
+      const flatbed = current.source === 'flatbed';
       let jobId;
       try {
         const result = await this.scan(current, {
@@ -276,17 +274,14 @@ export class HighbridgeClient {
           },
         });
         onResult?.(result);
-        // maxSheets 0 already took every sheet that was loaded. A positive maxSheets
-        // scans another batch while the feeder was used.
-        if (!limitedFeeder || result.usedFeeder === false) return;
+        if (flatbed || result.usedFeeder === false) return;
       } catch (err) {
         if (signal?.aborted || err?.code === 'aborted' || err?.code === 'canceled') {
           if (jobId) this._json('DELETE', `/scanner/${jobId}`).catch(() => {});
           return;
         }
-        // An empty feeder waits, including when maxSheets is 0. A flatbed, or a job that
-        // did not use the feeder, is a real failure.
-        const waitingForPaper = current.source !== 'flatbed'
+        // An empty feeder waits. A flatbed, or a job that did not use the feeder, does not.
+        const waitingForPaper = !flatbed
           && err?.details?.usedFeeder !== false
           && FEEDER_RETRY.has(err?.code);
         if (waitingForPaper) {
@@ -668,10 +663,10 @@ function defineDeviceElements() {
             </label>
           </div>
           <div class="form-row">
-            <label class="field"><span>Sheets</span>
-              <input type="number" data-sheets min="0" max="500" step="1" placeholder="Device default (0 = whole feeder)" />
+            <label class="field"><span>Sheets per document</span>
+              <input type="number" data-sheets min="0" max="500" step="1" placeholder="Device default (0 = no limit)" />
             </label>
-            <p class="hint">A positive sheet count stops the feeder after that many sheets. The front and back are two pages. Start keeps scanning the next sheets until Stop. An empty feeder waits.</p>
+            <p class="hint">A positive count starts a new document after that many sheets. The front and back are two pages. The feeder runs until it is empty. Start scans again until Stop, and an empty feeder waits.</p>
           </div>
           <div class="form-row">
             <label class="field"><span>Orientation</span>
