@@ -112,26 +112,34 @@ internal sealed class DevicesForm : Form
             HeaderStyle = ColumnHeaderStyle.Nonclickable,
             MultiSelect = false,
             HideSelection = false,
+            Margin = Padding.Empty,
         };
         list.Columns.Add("Name", 220);
         list.Columns.Add("Detail", 160);
+        list.Resize += (_, _) => FitListColumns(list);
         var grid = new PropertyGrid
         {
             Dock = DockStyle.Fill,
             HelpVisible = true,
             ToolbarVisible = false,
             PropertySort = PropertySort.CategorizedAlphabetical,
+            Margin = new Padding(8, 0, 0, 0),
         };
         grid.PropertyValueChanged += (_, _) => SaveGrid(module, list, grid);
 
-        var split = new SplitContainer
+        var split = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            Orientation = Orientation.Vertical,
-            SplitterDistance = 400,
+            ColumnCount = 2,
+            RowCount = 1,
+            Margin = Padding.Empty,
+            Padding = Padding.Empty,
         };
-        split.Panel1.Controls.Add(list);
-        split.Panel2.Controls.Add(grid);
+        split.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        split.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        split.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        split.Controls.Add(list, 0, 0);
+        split.Controls.Add(grid, 1, 0);
 
         var page = new TabPage(module.Title) { Tag = module };
         page.Controls.Add(split);
@@ -220,6 +228,7 @@ internal sealed class DevicesForm : Form
             }
 
             list.EndUpdate();
+            FitListColumns(list);
             if (list.SelectedItems.Count == 0 && list.Items.Count > 0 && list.Items[0].Tag is string)
             {
                 list.Items[0].Selected = true;
@@ -320,5 +329,41 @@ internal sealed class DevicesForm : Form
     }
 
     private static ListView FindList(TabPage page) =>
-        page.Controls.OfType<SplitContainer>().First().Panel1.Controls.OfType<ListView>().First();
+        page.Controls.OfType<TableLayoutPanel>().First().Controls.OfType<ListView>().First();
+
+    /// <summary>
+    /// Keeps Name and Detail inside the list. A vertical scrollbar narrows the client area;
+    /// fitting after that avoids a horizontal bar beside it.
+    /// </summary>
+    private static void FitListColumns(ListView list)
+    {
+        if (!list.IsHandleCreated || list.Columns.Count < 2 || list.ClientSize.Width <= 0)
+        {
+            return;
+        }
+
+        int width = list.ClientSize.Width;
+        bool overflows = list.Items.Count > 0 && list.Items[^1].Bounds.Bottom > list.ClientSize.Height;
+        if (overflows)
+        {
+            width -= SystemInformation.VerticalScrollBarWidth;
+        }
+
+        width = Math.Max(0, width - 2);
+        int name = Math.Max(96, width * 3 / 5);
+        int detail = width - name;
+        if (detail < 72)
+        {
+            detail = Math.Min(72, width / 2);
+            name = Math.Max(0, width - detail);
+        }
+
+        if (list.Columns[0].Width == name && list.Columns[1].Width == detail)
+        {
+            return;
+        }
+
+        list.Columns[0].Width = name;
+        list.Columns[1].Width = detail;
+    }
 }
