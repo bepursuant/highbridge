@@ -263,7 +263,7 @@ internal static class TwainDiagnostics
     private static readonly CapabilityId[] CommonCaps =
     [
         CapabilityId.ICapXferMech, CapabilityId.ICapPixelType, CapabilityId.ICapBitDepth, CapabilityId.ICapUnits,
-        CapabilityId.ICapXResolution, CapabilityId.ICapYResolution, CapabilityId.ICapPixelFlavor, CapabilityId.ICapCompression,
+        CapabilityId.ICapXResolution, CapabilityId.ICapYResolution, CapabilityId.ICapOrientation, CapabilityId.ICapPixelFlavor, CapabilityId.ICapCompression,
         CapabilityId.CapFeederEnabled, CapabilityId.CapFeederLoaded, CapabilityId.CapAutoFeed, CapabilityId.CapAutoScan,
         CapabilityId.CapDuplex, CapabilityId.CapDuplexEnabled, CapabilityId.CapXferCount, CapabilityId.CapIndicators,
         CapabilityId.CapUIControllable, CapabilityId.CapDeviceOnline, CapabilityId.CapPaperDetectable,

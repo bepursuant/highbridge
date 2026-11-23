@@ -35,7 +35,7 @@ try
         ColorMode = Get("--color", "color") switch { "bw" => ColorMode.BlackWhite, "gray" => ColorMode.Gray, _ => ColorMode.Color },
         Dpi = int.Parse(Get("--dpi", "200"), CultureInfo.InvariantCulture),
         Source = Get("--source", "auto") switch { "flatbed" => PaperSource.Flatbed, "feeder" => PaperSource.Feeder, _ => PaperSource.Auto },
-        MaxPages = int.Parse(Get("--max-pages", "0"), CultureInfo.InvariantCulture),
+        MaxSheets = int.Parse(Get("--max-sheets", Get("--max-pages", "0")), CultureInfo.InvariantCulture),
     };
     var pages = await backend.ScanAsync(options, null, CancellationToken.None).WaitAsync(TimeSpan.FromMinutes(2));
     string outDir = Get("--out", ".");

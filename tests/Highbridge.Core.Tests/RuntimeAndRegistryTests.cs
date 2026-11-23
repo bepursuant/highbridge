@@ -48,7 +48,7 @@ public class RuntimeAndRegistryTests
         Assert.NotNull(job);
         Assert.Equal(ScanTrigger.ProtocolUrl, job.Trigger);
         await job.Finished.WaitAsync(TimeSpan.FromSeconds(10));
-        Assert.Single(job.Pages);
+        Assert.Single(job.Documents);
     }
 
     [Fact]

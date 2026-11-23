@@ -98,7 +98,7 @@ public sealed class TwainScannerBackend : IScannerBackend, IDisposable
 
     public Task<bool> WaitForFeederAsync(ScanOptions options, CancellationToken cancellationToken)
     {
-        if (!options.OneSheet || options.Source == PaperSource.Flatbed)
+        if (options.Source == PaperSource.Flatbed)
         {
             return Task.FromResult(false);
         }

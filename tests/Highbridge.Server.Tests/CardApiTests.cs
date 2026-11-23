@@ -35,7 +35,7 @@ public sealed class CardApiTests : IAsyncLifetime
     [Fact]
     public async Task Status_names_the_scanner_and_the_card_reader()
     {
-        var status = await GetJson<StatusResponse>("/v1/status", Site);
+        var status = await GetJson<StatusResponse>("/status", Site);
 
         Assert.Equal("mock", status.Backend);
         Assert.Equal("scanner", status.Devices[0].Kind);
@@ -48,11 +48,11 @@ public sealed class CardApiTests : IAsyncLifetime
     public async Task Paired_site_reads_the_mock_card_through_http()
     {
         await Pair();
-        var readers = await GetJson<CardReadersResponse>("/v1/card-readers", Site);
+        var readers = await GetJson<CardReadersResponse>("/pcsc", Site);
         Assert.Contains(readers.Readers, reader => reader.Id == MockCardReaderBackend.SuccessId);
-        Assert.DoesNotContain("present", await Body("/v1/card-readers", Site), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("present", await Body("/pcsc", Site), StringComparison.OrdinalIgnoreCase);
 
-        var created = await Post("/v1/card-reads", Site, """{"interface":"contact"}""");
+        var created = await Post("/pcsc", Site, """{"interface":"contact"}""");
         Assert.Equal(HttpStatusCode.Accepted, created.StatusCode);
         var job = await Json<CardReadJobResponse>(created);
         job = await Poll(job.Id, Site);
@@ -67,8 +67,8 @@ public sealed class CardApiTests : IAsyncLifetime
         Assert.Equal(CardInterface.Contact, job.Interface);
         Assert.Null(job.Applications[1].PreferredName);
 
-        Assert.Equal(HttpStatusCode.NoContent, (await _http.SendAsync(Request(HttpMethod.Delete, $"/v1/card-reads/{job.Id}", Site))).StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, (await _http.SendAsync(Request(HttpMethod.Get, $"/v1/card-reads/{job.Id}", Site))).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await _http.SendAsync(Request(HttpMethod.Delete, $"/pcsc/{job.Id}", Site))).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await _http.SendAsync(Request(HttpMethod.Get, $"/pcsc/{job.Id}", Site))).StatusCode);
     }
 
     [Theory]
@@ -77,7 +77,7 @@ public sealed class CardApiTests : IAsyncLifetime
     public async Task Failure_readers_finish_as_failed_jobs(string readerId, string code)
     {
         await Pair();
-        var created = await Json<CardReadJobResponse>(await Post("/v1/card-reads", Site, $$"""{"readerId":"{{readerId}}"}"""));
+        var created = await Json<CardReadJobResponse>(await Post("/pcsc", Site, $$"""{"readerId":"{{readerId}}"}"""));
         var job = await Poll(created.Id, Site);
 
         Assert.Equal(CardReadStatus.Failed, job.Status);
@@ -89,7 +89,7 @@ public sealed class CardApiTests : IAsyncLifetime
     public async Task Aid_selects_the_second_application()
     {
         await Pair();
-        var created = await Json<CardReadJobResponse>(await Post("/v1/card-reads", Site, """{"aid":"A0000000041010"}"""));
+        var created = await Json<CardReadJobResponse>(await Post("/pcsc", Site, """{"aid":"A0000000041010"}"""));
         var job = await Poll(created.Id, Site);
 
         Assert.Equal(MockCardReaderBackend.MastercardPan, job.Selected!.Pan);
@@ -101,10 +101,10 @@ public sealed class CardApiTests : IAsyncLifetime
     public async Task Another_origin_cannot_collect_the_read()
     {
         await Pair();
-        var created = await Json<CardReadJobResponse>(await Post("/v1/card-reads", Site, "{}"));
-        Assert.Equal(HttpStatusCode.OK, (await _http.SendAsync(Request(HttpMethod.Post, "/v1/pair", OtherSite))).StatusCode);
+        var created = await Json<CardReadJobResponse>(await Post("/pcsc", Site, "{}"));
+        Assert.Equal(HttpStatusCode.OK, (await _http.SendAsync(Request(HttpMethod.Post, "/pair", OtherSite))).StatusCode);
 
-        var stolen = await _http.SendAsync(Request(HttpMethod.Get, $"/v1/card-reads/{created.Id}", OtherSite));
+        var stolen = await _http.SendAsync(Request(HttpMethod.Get, $"/pcsc/{created.Id}", OtherSite));
         Assert.Equal(HttpStatusCode.NotFound, stolen.StatusCode);
         Assert.Equal("not_found", (await Json<ErrorResponse>(stolen)).Error);
     }
@@ -113,14 +113,14 @@ public sealed class CardApiTests : IAsyncLifetime
     public async Task Old_approval_is_asked_again_and_an_apdu_is_rejected()
     {
         _runtime.Settings.Update(s => s.PairedOrigins.Add(new PairedOrigin { Origin = Site, ApprovalVersion = 3 }));
-        var rejected = await Post("/v1/card-reads", Site, "{}");
+        var rejected = await Post("/pcsc", Site, "{}");
         Assert.Equal(HttpStatusCode.Forbidden, rejected.StatusCode);
         Assert.Equal("approval_required", (await Json<ErrorResponse>(rejected)).Error);
 
-        Assert.Equal(HttpStatusCode.OK, (await _http.SendAsync(Request(HttpMethod.Post, "/v1/pair", Site))).StatusCode);
-        Assert.Equal(HttpStatusCode.Accepted, (await Post("/v1/card-reads", Site, "{}")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await _http.SendAsync(Request(HttpMethod.Post, "/pair", Site))).StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, (await Post("/pcsc", Site, "{}")).StatusCode);
 
-        var apdu = await Post("/v1/card-reads", Site, """{"apdu":"00A40400"}""");
+        var apdu = await Post("/pcsc", Site, """{"apdu":"00A40400"}""");
         Assert.Equal(HttpStatusCode.BadRequest, apdu.StatusCode);
         Assert.Equal("invalid_options", (await Json<ErrorResponse>(apdu)).Error);
     }
@@ -131,12 +131,12 @@ public sealed class CardApiTests : IAsyncLifetime
         await Restart(new HighbridgePolicy { CardReader = new CardReaderPolicy { Mode = CardReaderMode.Disabled } });
         await Pair();
 
-        var blocked = await _http.SendAsync(Request(HttpMethod.Get, "/v1/card-readers", Site));
+        var blocked = await _http.SendAsync(Request(HttpMethod.Get, "/pcsc", Site));
         Assert.Equal(HttpStatusCode.Forbidden, blocked.StatusCode);
         Assert.Equal("card_reader_disabled", (await Json<ErrorResponse>(blocked)).Error);
-        Assert.Equal(HttpStatusCode.Forbidden, (await Post("/v1/card-reads", Site, "{}")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Post("/pcsc", Site, "{}")).StatusCode);
 
-        var scan = await Post("/v1/scans", Site, """{"source":"flatbed","maxPages":1}""");
+        var scan = await Post("/scanner", Site, """{"source":"flatbed","maxSheets":1}""");
         Assert.Equal(HttpStatusCode.Accepted, scan.StatusCode);
     }
 
@@ -178,7 +178,7 @@ public sealed class CardApiTests : IAsyncLifetime
     }
 
     private async Task Pair() =>
-        Assert.Equal(HttpStatusCode.OK, (await _http.SendAsync(Request(HttpMethod.Post, "/v1/pair", Site))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await _http.SendAsync(Request(HttpMethod.Post, "/pair", Site))).StatusCode);
 
     private async Task<string> Body(string path, string origin) =>
         await (await _http.SendAsync(Request(HttpMethod.Get, path, origin))).Content.ReadAsStringAsync();
@@ -195,7 +195,7 @@ public sealed class CardApiTests : IAsyncLifetime
         var clock = System.Diagnostics.Stopwatch.StartNew();
         while (clock.Elapsed < TimeSpan.FromSeconds(5))
         {
-            var job = await GetJson<CardReadJobResponse>($"/v1/card-reads/{id}", origin);
+            var job = await GetJson<CardReadJobResponse>($"/pcsc/{id}", origin);
             if (job.FinishedAt is not null)
             {
                 return job;

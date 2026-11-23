@@ -4,6 +4,7 @@ using Highbridge.Barcodes;
 using Highbridge.Cards;
 using Highbridge.Configuration;
 using Highbridge.Consent;
+using Highbridge.Devices;
 using Highbridge.Jobs;
 using Highbridge.Protocol;
 using Highbridge.Provenance;
@@ -23,8 +24,8 @@ public sealed class HighbridgeRuntime : IDisposable
 
     /// <param name="port">Only the dev host and tests pass this, to run several hosts side by side.</param>
     public HighbridgeRuntime(
-        IScannerBackend backend,
-        ICardReaderBackend cardReader,
+        IScannerBackend scannerBackend,
+        ICardReaderBackend cardReaderBackend,
         IConsentService consent,
         SettingsStore settings,
         HighbridgePolicy policy,
@@ -35,27 +36,27 @@ public sealed class HighbridgeRuntime : IDisposable
         BarcodeWorker? barcodeWorker = null)
     {
         loggerFactory ??= NullLoggerFactory.Instance;
-        Backend = backend;
-        CardReader = cardReader;
+        ScannerBackend = scannerBackend;
+        CardReaderBackend = cardReaderBackend;
         Consent = consent;
         Settings = settings;
         Policy = policy;
         Port = port;
         Origins = new OriginRegistry(settings, policy, time);
         Jobs = new ScanJobManager(
-            backend,
+            scannerBackend,
             Origins,
             time,
             logger: loggerFactory.CreateLogger<ScanJobManager>(),
-            provenance: new ProvenanceStamping(policy.ProvenanceStamp, identity),
+            provenance: new ProvenanceStamping(identity),
             barcodeWorker: barcodeWorker);
-        CardReads = new CardReadManager(cardReader, Origins, policy, time, logger: loggerFactory.CreateLogger<CardReadManager>());
+        CardReads = new CardReadManager(cardReaderBackend, Origins, policy, time, logger: loggerFactory.CreateLogger<CardReadManager>());
         Logger = loggerFactory.CreateLogger<HighbridgeRuntime>();
     }
 
-    public IScannerBackend Backend { get; }
+    public IScannerBackend ScannerBackend { get; }
 
-    public ICardReaderBackend CardReader { get; }
+    public ICardReaderBackend CardReaderBackend { get; }
 
     public IConsentService Consent { get; }
 
@@ -107,11 +108,13 @@ public sealed class HighbridgeRuntime : IDisposable
         {
             if (command.Action == ProtocolAction.ReadCard)
             {
-                var read = CardReads.Start(origin, command.CardRead!, CardReadTrigger.ProtocolUrl, command.RequestId);
+                var card = Resolve(command.Fields, fields => DeviceOptions.ResolveCardAsync(Settings, CardReaderBackend, fields, CancellationToken.None), command.CardRead!);
+                var read = CardReads.Start(origin, card, CardReadTrigger.ProtocolUrl, command.RequestId);
                 return new ProtocolResult(ProtocolOutcome.CardReadStarted, read.Id);
             }
 
-            var job = Jobs.Start(origin, command.Options, ScanTrigger.ProtocolUrl, command.RequestId);
+            var options = Resolve(command.Fields, fields => DeviceOptions.ResolveScanAsync(Settings, ScannerBackend, fields, CancellationToken.None), command.Options);
+            var job = Jobs.Start(origin, options, ScanTrigger.ProtocolUrl, command.RequestId);
             return new ProtocolResult(ProtocolOutcome.ScanStarted, job.Id);
         }
         catch (JobRejectedException ex)
@@ -119,6 +122,25 @@ public sealed class HighbridgeRuntime : IDisposable
             Logger.LogWarning("Rejected highbridge:// {Action}: {Code}", command.Action, ex.Code);
             return new ProtocolResult(ProtocolOutcome.Rejected, ex.Message);
         }
+        catch (System.Text.Json.JsonException ex)
+        {
+            Logger.LogWarning(ex, "Rejected highbridge:// {Action}: the options were not valid", command.Action);
+            return new ProtocolResult(ProtocolOutcome.Rejected, "The scan options were not valid.");
+        }
+    }
+
+    /// <summary>
+    /// Device defaults fill fields the link left out. Listing devices can touch TWAIN, so it runs
+    /// off the caller's thread (the tray UI thread, when a link is opened).
+    /// </summary>
+    private static T Resolve<T>(System.Text.Json.JsonElement? fields, Func<System.Text.Json.JsonElement, Task<T>> resolve, T parsed)
+    {
+        if (fields is not { } request)
+        {
+            return parsed;
+        }
+
+        return Task.Run(() => resolve(request)).GetAwaiter().GetResult();
     }
 
     public void Dispose()

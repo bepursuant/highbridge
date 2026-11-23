@@ -25,11 +25,11 @@ internal static class TestRuntime
         IConsentService? consent = null,
         HighbridgePolicy? policy = null,
         TimeProvider? time = null,
-        IScannerBackend? backend = null,
-        ICardReaderBackend? cardReader = null) =>
+        IScannerBackend? scannerBackend = null,
+        ICardReaderBackend? cardReaderBackend = null) =>
         new(
-            backend ?? FastMock(),
-            cardReader ?? new MockCardReaderBackend(),
+            scannerBackend ?? FastMock(),
+            cardReaderBackend ?? new MockCardReaderBackend(),
             consent ?? new FixedConsentService(allow: true),
             new SettingsStore(path: null),
             policy ?? new HighbridgePolicy(),

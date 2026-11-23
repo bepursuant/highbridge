@@ -1,12 +1,18 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
-using Highbridge.Provenance;
 
 namespace Highbridge.Configuration;
 
 public sealed class HighbridgeSettings
 {
     public List<PairedOrigin> PairedOrigins { get; set; } = [];
+
+    /// <summary>
+    /// Saved option defaults, keyed by module (<c>scanner</c>, <c>pcsc</c>) and then by physical device id.
+    /// A field a page omits comes from here. A field the page sends replaces it.
+    /// </summary>
+    public Dictionary<string, Dictionary<string, JsonObject>> Devices { get; set; } = new(StringComparer.Ordinal);
 }
 
 public sealed class PairedOrigin
@@ -16,7 +22,7 @@ public sealed class PairedOrigin
     public DateTimeOffset PairedAt { get; set; }
 
     /// <summary>
-    /// Which approval wording the user accepted. Version 2 tells the user that stamped scans send
+    /// Which approval wording the user accepted. Version 2 tells the user that scans send
     /// their Windows user name and computer name. Version 3 tells them a card read sends the last
     /// four digits, the expiry, and the cardholder name. Version 4 tells them the full card number
     /// is sent to the site over the local connection. Missing means an older approval.
@@ -54,9 +60,6 @@ public sealed class HighbridgePolicy
 
     /// <summary>Accept http://localhost and http://127.0.0.1 pages (development). Default true.</summary>
     public bool? AllowInsecureLoopbackOrigins { get; set; }
-
-    /// <summary>Provenance stamp rules; for example <c>{"mode": "required"}</c> stamps every scan.</summary>
-    public ProvenanceStampPolicy? ProvenanceStamp { get; set; }
 
     /// <summary>
     /// Card reader switch. <c>{"mode": "disabled"}</c> makes card routes fail with
@@ -106,6 +109,35 @@ public sealed class SettingsStore
         {
             return Clone(_current);
         }
+    }
+
+    public JsonObject? DeviceOptions(string module, string? deviceId)
+    {
+        if (string.IsNullOrEmpty(deviceId))
+        {
+            return null;
+        }
+
+        lock (_gate)
+        {
+            return _current.Devices.TryGetValue(module, out var devices) && devices.TryGetValue(deviceId, out var options)
+                ? options
+                : null;
+        }
+    }
+
+    public void SaveDeviceOptions(string module, string deviceId, JsonObject options)
+    {
+        Update(settings =>
+        {
+            if (!settings.Devices.TryGetValue(module, out var devices))
+            {
+                devices = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+                settings.Devices[module] = devices;
+            }
+
+            devices[deviceId] = options;
+        });
     }
 
     public void Update(Action<HighbridgeSettings> mutate)

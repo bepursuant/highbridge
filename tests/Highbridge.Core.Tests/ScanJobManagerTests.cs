@@ -1,5 +1,6 @@
 using Highbridge.Configuration;
 using Highbridge.Consent;
+using Highbridge.Imaging;
 using Highbridge.Jobs;
 using Highbridge.Scanning;
 using Highbridge.Security;
@@ -21,7 +22,9 @@ public class ScanJobManagerTests
         await job.Finished.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.Equal(ScanJobStatus.Completed, job.Status);
-        Assert.Equal(4, job.Pages.Count);
+        Assert.Equal(4, job.PagesScanned);
+        var document = Assert.Single(job.Documents);
+        Assert.Equal(4, document.PageCount);
         Assert.Same(job, runtime.Jobs.Get(job.Id, Origin));
         Assert.Null(runtime.Jobs.Get(job.Id, "https://other.example"));
         Assert.False(runtime.Jobs.Delete(job.Id, "https://other.example"));
@@ -53,7 +56,7 @@ public class ScanJobManagerTests
     public async Task Protocol_scan_starts_the_scanner_only_after_its_origin_claims_it()
     {
         var backend = new CountingBackend(TestRuntime.FastMock());
-        using var runtime = TestRuntime.Create(backend: backend);
+        using var runtime = TestRuntime.Create(scannerBackend: backend);
         runtime.Origins.Pair(Origin);
         runtime.Origins.Pair("https://other.example");
 
@@ -117,15 +120,25 @@ public class ScanJobManagerTests
     }
 
     [Fact]
-    public async Task Max_pages_limits_the_feeder()
+    public async Task Max_sheets_limits_the_feeder_and_pages_are_stacked_into_documents()
     {
         using var runtime = TestRuntime.Create();
         runtime.Origins.Pair(Origin);
 
-        var job = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, MaxPages = 3 }, ScanTrigger.Api);
-        await job.Finished.WaitAsync(TimeSpan.FromSeconds(10));
+        var limited = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, MaxSheets = 1 }, ScanTrigger.Api);
+        await limited.Finished.WaitAsync(TimeSpan.FromSeconds(10));
 
-        Assert.Equal(3, job.Pages.Count);
+        Assert.Equal(2, limited.PagesScanned);
+        var oneSheet = Assert.Single(limited.Documents);
+        Assert.Equal(2, oneSheet.PageCount);
+
+        var split = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, MaxPagesPerDocument = 2 }, ScanTrigger.Api);
+        await split.Finished.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(4, split.PagesScanned);
+        Assert.Equal(2, split.Documents.Count);
+        Assert.All(split.Documents, document => Assert.Equal(2, document.PageCount));
+        Assert.True(split.Documents[1].Height > split.Documents[0].Height / 2);
     }
 
     [Theory]
@@ -164,7 +177,7 @@ public class ScanJobManagerTests
     public async Task Delete_cancels_a_scan_that_has_not_started()
     {
         var backend = new CountingBackend(TestRuntime.FastMock());
-        using var runtime = TestRuntime.Create(backend: backend);
+        using var runtime = TestRuntime.Create(scannerBackend: backend);
         runtime.Origins.Pair(Origin);
 
         var job = runtime.Jobs.Start(Origin, new ScanOptions(), ScanTrigger.ProtocolUrl, ScanJobManager.NewId());
@@ -200,60 +213,57 @@ public class ScanJobManagerTests
     public async Task One_sheet_takes_the_front_and_back_and_leaves_the_rest_of_the_feeder()
     {
         var mock = new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.Zero, FeederSheets = 2 });
-        using var runtime = TestRuntime.Create(backend: mock);
+        using var runtime = TestRuntime.Create(scannerBackend: mock);
         runtime.Origins.Pair(Origin);
 
         var whole = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true }, ScanTrigger.Api);
         await whole.Finished.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(4, whole.Pages.Count);
-        Assert.Null(whole.UsedFeeder);
+        Assert.Equal(4, Assert.Single(whole.Documents).PageCount);
+        Assert.True(whole.UsedFeeder);
 
-        var first = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, OneSheet = true }, ScanTrigger.Api);
+        var first = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, MaxSheets = 1 }, ScanTrigger.Api);
         await first.Finished.WaitAsync(TimeSpan.FromSeconds(5));
-        var second = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, OneSheet = true }, ScanTrigger.Api);
+        var second = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, MaxSheets = 1 }, ScanTrigger.Api);
         await second.Finished.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(ScanJobStatus.Completed, first.Status);
-        Assert.Equal(2, first.Pages.Count);
+        Assert.Equal(2, Assert.Single(first.Documents).PageCount);
         Assert.True(first.UsedFeeder);
-        Assert.Equal(2, second.Pages.Count);
+        Assert.Equal(2, Assert.Single(second.Documents).PageCount);
 
-        var waiting = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, OneSheet = true }, ScanTrigger.Api);
-        await Task.Delay(80);
-        Assert.False(waiting.IsFinished);
-        Assert.Equal(ScanJobStatus.Scanning, waiting.Status);
+        var waiting = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, MaxSheets = 1 }, ScanTrigger.Api);
+        await WaitUntilScanning(waiting);
 
         mock.LoadSheets(1);
         await waiting.Finished.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(ScanJobStatus.Completed, waiting.Status);
-        Assert.Equal(2, waiting.Pages.Count);
+        Assert.Equal(2, Assert.Single(waiting.Documents).PageCount);
     }
 
     [Fact]
     public async Task An_empty_feeder_waits_instead_of_failing_a_one_sheet_scan()
     {
         var mock = new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.Zero, FeederSheets = 0 });
-        using var runtime = TestRuntime.Create(backend: mock);
+        using var runtime = TestRuntime.Create(scannerBackend: mock);
         runtime.Origins.Pair(Origin);
 
-        var job = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, OneSheet = true }, ScanTrigger.Api);
-        await Task.Delay(80);
-        Assert.Equal(ScanJobStatus.Scanning, job.Status);
+        var job = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, MaxSheets = 1 }, ScanTrigger.Api);
+        await WaitUntilScanning(job);
 
         mock.LoadSheets(1);
         await job.Finished.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(ScanJobStatus.Completed, job.Status);
-        Assert.Equal(2, job.Pages.Count);
+        Assert.Equal(2, Assert.Single(job.Documents).PageCount);
     }
 
     [Fact]
     public async Task Cancelling_a_one_sheet_wait_ends_the_job()
     {
         var mock = new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.Zero, FeederSheets = 0 });
-        using var runtime = TestRuntime.Create(backend: mock);
+        using var runtime = TestRuntime.Create(scannerBackend: mock);
         runtime.Origins.Pair(Origin);
 
-        var job = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, OneSheet = true }, ScanTrigger.Api);
+        var job = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, MaxSheets = 1 }, ScanTrigger.Api);
         await Task.Delay(40);
         Assert.True(runtime.Jobs.Delete(job.Id, Origin));
         await job.Finished.WaitAsync(TimeSpan.FromSeconds(5));
@@ -266,17 +276,17 @@ public class ScanJobManagerTests
     public async Task A_flatbed_one_sheet_scan_is_one_page_and_does_not_wait()
     {
         var mock = new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.Zero, FeederSheets = 0 });
-        using var runtime = TestRuntime.Create(backend: mock);
+        using var runtime = TestRuntime.Create(scannerBackend: mock);
         runtime.Origins.Pair(Origin);
 
         var job = runtime.Jobs.Start(
             Origin,
-            new ScanOptions { Source = PaperSource.Flatbed, ScannerId = MockScannerBackend.FlatbedId, Duplex = true, OneSheet = true },
+            new ScanOptions { Source = PaperSource.Flatbed, ScannerId = MockScannerBackend.FlatbedId, Duplex = true, MaxSheets = 1 },
             ScanTrigger.Api);
         await job.Finished.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(ScanJobStatus.Completed, job.Status);
-        Assert.Single(job.Pages);
+        Assert.Equal(1, Assert.Single(job.Documents).PageCount);
         Assert.False(job.UsedFeeder);
     }
 
@@ -284,7 +294,7 @@ public class ScanJobManagerTests
     public async Task Scans_run_one_at_a_time()
     {
         var backend = new ConcurrencyProbe();
-        using var runtime = TestRuntime.Create(backend: backend);
+        using var runtime = TestRuntime.Create(scannerBackend: backend);
         runtime.Origins.Pair(Origin);
 
         var jobs = Enumerable.Range(0, 4).Select(_ => runtime.Jobs.Start(Origin, new ScanOptions(), ScanTrigger.Api)).ToArray();
@@ -308,6 +318,22 @@ public class ScanJobManagerTests
         Assert.Equal(ScanJobStatus.Failed, job.Status);
         Assert.Equal("scan_timeout", job.ErrorCode);
         await backend.Canceled.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    /// <summary>
+    /// The scan task sets Scanning only after it takes the scan lock. A fixed sleep loses that race
+    /// when the runner is busy, so wait until the job is actually waiting on the feeder.
+    /// </summary>
+    private static async Task WaitUntilScanning(ScanJob job)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (job.Status == ScanJobStatus.Queued && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
+
+        Assert.Equal(ScanJobStatus.Scanning, job.Status);
+        Assert.False(job.IsFinished);
     }
 
     private sealed class HangingBackend : IScannerBackend
@@ -347,7 +373,7 @@ public class ScanJobManagerTests
             MaxConcurrent = Math.Max(MaxConcurrent, now);
             await Task.Delay(20, cancellationToken);
             Interlocked.Decrement(ref _current);
-            var page = new ScannedPage(0, "image/png", 1, 1, [1]);
+            var page = new ScannedPage(0, "image/png", 1, 1, PngEncoder.Encode(1, 1, PngPixelFormat.Gray8, [255]));
             onPage?.Invoke(page);
             return [page];
         }

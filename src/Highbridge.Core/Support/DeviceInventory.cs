@@ -10,7 +10,7 @@ public sealed record SupportSnapshot(
     string Version,
     int Port,
     string ScannerBackend,
-    string ReaderBackend,
+    string CardReaderBackend,
     bool CardReaderEnabled,
     IReadOnlyList<ScannerInfo> Scanners,
     IReadOnlyList<CardReaderInfo> Readers,
@@ -24,8 +24,8 @@ public static class DeviceInventory
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(20);
 
     public static async Task<SupportSnapshot> CollectAsync(
-        IScannerBackend scanners,
-        ICardReaderBackend readers,
+        IScannerBackend scannerBackend,
+        ICardReaderBackend cardReaderBackend,
         string version,
         int port,
         bool cardReaderEnabled,
@@ -38,9 +38,9 @@ public static class DeviceInventory
         var clock = time ?? TimeProvider.System;
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var scannerTask = listScanners
-            ? ListScanners(scanners, timeoutSource.Token, cancellationToken)
+            ? ListScanners(scannerBackend, timeoutSource.Token, cancellationToken)
             : Task.FromResult<(IReadOnlyList<ScannerInfo> Items, string? Error)>(([], null));
-        var readerTask = ListReaders(readers, timeoutSource.Token, cancellationToken);
+        var readerTask = ListReaders(cardReaderBackend, timeoutSource.Token, cancellationToken);
         try
         {
             await Task.WhenAll(scannerTask, readerTask).WaitAsync(limit, cancellationToken).ConfigureAwait(false);
@@ -59,8 +59,8 @@ public static class DeviceInventory
         return new SupportSnapshot(
             version,
             port,
-            scanners.Name,
-            readers.Name,
+            scannerBackend.Name,
+            cardReaderBackend.Name,
             cardReaderEnabled,
             foundScanners,
             foundReaders,
@@ -71,13 +71,13 @@ public static class DeviceInventory
     }
 
     private static async Task<(IReadOnlyList<ScannerInfo> Items, string? Error)> ListScanners(
-        IScannerBackend backend,
+        IScannerBackend scannerBackend,
         CancellationToken timeoutToken,
         CancellationToken callerToken)
     {
         try
         {
-            return (await backend.ListScannersAsync(timeoutToken).ConfigureAwait(false), null);
+            return (await scannerBackend.ListScannersAsync(timeoutToken).ConfigureAwait(false), null);
         }
         catch (OperationCanceledException) when (callerToken.IsCancellationRequested)
         {
@@ -94,13 +94,13 @@ public static class DeviceInventory
     }
 
     private static async Task<(IReadOnlyList<CardReaderInfo> Items, string? Error)> ListReaders(
-        ICardReaderBackend backend,
+        ICardReaderBackend cardReaderBackend,
         CancellationToken timeoutToken,
         CancellationToken callerToken)
     {
         try
         {
-            return (await backend.ListReadersAsync(timeoutToken).ConfigureAwait(false), null);
+            return (await cardReaderBackend.ListReadersAsync(timeoutToken).ConfigureAwait(false), null);
         }
         catch (OperationCanceledException) when (callerToken.IsCancellationRequested)
         {
@@ -137,7 +137,7 @@ public static class SupportReport
         {
             AppendScanners(text, snapshot.Scanners);
         }
-        text.Append("card readers (").Append(snapshot.ReaderBackend).Append(", ");
+        text.Append("card readers (").Append(snapshot.CardReaderBackend).Append(", ");
         text.Append(snapshot.CardReaderEnabled ? "enabled" : "disabled by policy").Append(')');
         AppendError(text, snapshot.ReaderError);
         text.AppendLine();

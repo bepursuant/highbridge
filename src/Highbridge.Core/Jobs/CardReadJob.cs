@@ -16,7 +16,7 @@ public enum CardReadStatus
 [JsonConverter(typeof(CamelCaseEnumConverter<CardReadTrigger>))]
 public enum CardReadTrigger
 {
-    /// <summary>POST /v1/card-reads with a verified Origin header.</summary>
+    /// <summary>POST /pcsc with a verified Origin header.</summary>
     Api,
 
     /// <summary>

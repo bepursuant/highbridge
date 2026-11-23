@@ -158,6 +158,37 @@ public class BarcodeDetectorTests
     }
 
     [Fact]
+    public void Finds_a_faded_wide_code128_on_the_finished_orientation()
+    {
+        var matrix = new ZXing.OneD.Code128Writer().encode("12345", ZXing.BarcodeFormat.CODE_128, 1500, 180);
+        const int width = 2200;
+        const int height = 400;
+        var pixels = new byte[width * height];
+        Array.Fill(pixels, (byte)200);
+        int left = (width - matrix.Width) / 2;
+        int top = 40;
+        for (int y = 0; y < matrix.Height; y++)
+        {
+            for (int x = 0; x < matrix.Width; x++)
+            {
+                pixels[((top + y) * width) + left + x] = matrix[x, y] ? (byte)150 : (byte)200;
+            }
+        }
+
+        var faded = BarcodeDetector.Detect(
+            new LuminanceImage(width, height, pixels),
+            0,
+            BarcodeFormat.Code128,
+            TimeSpan.FromSeconds(10),
+            orientationApplied: true);
+        Assert.Contains(faded.Barcodes, barcode => barcode.Text == "12345" && barcode.Rotation == 0);
+
+        var turned = Page(900, 1100, canvas => MockBarcodeSheet.DrawCode(canvas, BarcodeFormat.Code128, "SIDEWAYS", 450, 550, 90, Dpi, Black));
+        var missed = BarcodeDetector.Detect(turned, 0, BarcodeFormat.Code128, TimeSpan.FromSeconds(10), orientationApplied: true);
+        Assert.DoesNotContain(missed.Barcodes, barcode => barcode.Text == "SIDEWAYS");
+    }
+
+    [Fact]
     public void Shrinks_very_large_pages_and_reports_full_size_coordinates()
     {
         // About A4 at 480 dpi: above the limit, so it is searched at half size.

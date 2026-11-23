@@ -21,7 +21,7 @@ public sealed class CardReadManager : IDisposable
     /// <summary>Extra time after <see cref="CardReadOptions.WaitForCardMs"/> before a stuck read is given up.</summary>
     private static readonly TimeSpan ReadSlack = TimeSpan.FromSeconds(30);
 
-    private readonly ICardReaderBackend _backend;
+    private readonly ICardReaderBackend _cardReaderBackend;
     private readonly OriginRegistry _origins;
     private readonly HighbridgePolicy _policy;
     private readonly TimeProvider _time;
@@ -33,7 +33,7 @@ public sealed class CardReadManager : IDisposable
     private readonly ILogger _logger;
 
     public CardReadManager(
-        ICardReaderBackend backend,
+        ICardReaderBackend cardReaderBackend,
         OriginRegistry origins,
         HighbridgePolicy policy,
         TimeProvider? time = null,
@@ -42,7 +42,7 @@ public sealed class CardReadManager : IDisposable
         ILogger<CardReadManager>? logger = null)
     {
         _logger = logger ?? NullLogger<CardReadManager>.Instance;
-        _backend = backend;
+        _cardReaderBackend = cardReaderBackend;
         _origins = origins;
         _policy = policy;
         _time = time ?? TimeProvider.System;
@@ -53,7 +53,7 @@ public sealed class CardReadManager : IDisposable
 
     public event Action<CardReadJob>? JobFinished;
 
-    public string BackendName => _backend.Name;
+    public string BackendName => _cardReaderBackend.Name;
 
     public CardReadJob Start(string origin, CardReadOptions options, CardReadTrigger trigger, string? requestedId = null)
     {
@@ -135,7 +135,7 @@ public sealed class CardReadManager : IDisposable
     }
 
     public Task<IReadOnlyList<CardReaderInfo>> ListReadersAsync(CancellationToken cancellationToken) =>
-        _backend.ListReadersAsync(cancellationToken);
+        _cardReaderBackend.ListReadersAsync(cancellationToken);
 
     public void PurgeExpired()
     {
@@ -195,11 +195,11 @@ public sealed class CardReadManager : IDisposable
                 // Outside the read budget: the card may sit in the slot for the whole session.
                 // Stop cancels this wait. The card number is not logged.
                 _logger.LogInformation("Card read {JobId} is waiting for the card to leave the slot", job.Id);
-                await _backend.WaitForCardRemovalAsync(job.Options, ct).ConfigureAwait(false);
+                await _cardReaderBackend.WaitForCardRemovalAsync(job.Options, ct).ConfigureAwait(false);
             }
 
             var budget = TimeSpan.FromMilliseconds(job.Options.WaitForCardMs) + ReadSlack;
-            var result = await _backend.ReadAsync(job.Options, ct).WaitAsync(budget, _time, ct).ConfigureAwait(false);
+            var result = await _cardReaderBackend.ReadAsync(job.Options, ct).WaitAsync(budget, _time, ct).ConfigureAwait(false);
             Complete(job, CardReadStatus.Completed, result);
         }
         catch (OperationCanceledException)

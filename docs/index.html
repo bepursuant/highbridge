@@ -29,67 +29,7 @@
       <h1 id="scan-heading">Scan a document</h1>
       <p class="lede">This page asks the highbridge app on your computer to scan with your TWAIN scanner and sends the pages back here. Nothing is uploaded anywhere.</p>
 
-      <form id="scan-form" novalidate>
-        <label class="field">
-          <span>Scanner</span>
-          <div class="row">
-            <select id="scanner" name="scannerId" disabled>
-              <option value="">Default scanner</option>
-            </select>
-            <button type="button" id="connect" class="secondary">Connect</button>
-          </div>
-        </label>
-
-        <div class="grid2">
-          <label class="field">
-            <span>Resolution</span>
-            <select name="dpi">
-              <option value="150">150 dpi (fast)</option>
-              <option value="200" selected>200 dpi</option>
-              <option value="300">300 dpi (archive)</option>
-              <option value="600">600 dpi (photo)</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Paper source</span>
-            <select name="source">
-              <option value="auto" selected>Automatic</option>
-              <option value="feeder">Document feeder</option>
-              <option value="flatbed">Flatbed glass</option>
-            </select>
-          </label>
-        </div>
-
-        <fieldset class="field segmented">
-          <legend>Color</legend>
-          <label><input type="radio" name="colorMode" value="color" checked /><span>Color</span></label>
-          <label><input type="radio" name="colorMode" value="gray" /><span>Grayscale</span></label>
-          <label><input type="radio" name="colorMode" value="blackWhite" /><span>Black &amp; white</span></label>
-        </fieldset>
-
-        <fieldset class="field segmented">
-          <legend>Provenance stamp</legend>
-          <label><input type="radio" name="stamp" value="" checked /><span>Off</span></label>
-          <label><input type="radio" name="stamp" value="top" /><span>Top</span></label>
-          <label><input type="radio" name="stamp" value="bottom" /><span>Bottom</span></label>
-        </fieldset>
-        <p class="hint">Adds a band with the scan time, computer, Windows user, scanner, page number, this site and a scan id. highbridge fills it in; the page only picks where it goes.</p>
-
-        <label class="check"><input type="checkbox" name="duplex" /> Scan both sides (duplex)</label>
-        <label class="check"><input type="checkbox" name="oneSheet" /> One sheet at a time</label>
-        <p class="hint">On a duplex feeder, each scan is the front and the back of one sheet. Further sheets stay for the next pass. An empty feeder waits. Off, one scan takes the whole feeder. A flatbed is always a single scan.</p>
-        <label class="check"><input type="checkbox" name="showDriverUi" /> Use the scanner's own settings dialog</label>
-        <label class="check"><input type="checkbox" name="barcodes" /> Find barcodes (QR, Data Matrix, PDF417, Code 128/39, EAN/UPC, ITF)</label>
-
-        <div class="row actions">
-          <button type="submit" id="scan" class="primary">Scan</button>
-          <button type="button" id="scan-start" class="secondary">Start</button>
-          <button type="button" id="scan-stop" class="secondary" disabled>Stop</button>
-        </div>
-        <p id="progress" class="progress" aria-live="polite"></p>
-      </form>
-
-      <div id="error" class="notice error" role="alert" hidden></div>
+      <hb-scan id="scanner"></hb-scan>
 
       <details class="howto">
         <summary>How this works</summary>
@@ -103,21 +43,14 @@
 
     <section class="panel results" aria-labelledby="results-heading">
       <div class="results-head">
-        <h2 id="results-heading">Pages</h2>
+        <h2 id="results-heading">Documents</h2>
         <button type="button" id="clear" class="ghost" hidden>Clear</button>
       </div>
       <div id="empty" class="empty">
         <div class="empty-art" aria-hidden="true"></div>
-        <p>Scanned pages will appear here.</p>
+        <p>Scanned documents will appear here. Each file stacks that scan's pages from top to bottom.</p>
       </div>
       <ol id="pages" class="pages"></ol>
-      <div id="barcodes" class="barcodes" hidden>
-        <h2>Barcodes</h2>
-        <table>
-          <thead><tr><th>Page</th><th>Format</th><th>Text</th><th>Orientation</th></tr></thead>
-          <tbody id="barcode-rows"></tbody>
-        </table>
-      </div>
     </section>
   </div>
 
@@ -126,47 +59,7 @@
       <h1 id="card-heading">Read a card</h1>
       <p class="lede">This page asks the highbridge app on your computer to read a payment card. For the application it selects, the result includes the full card number, the expiry, and the cardholder name. highbridge runs on this computer and gives that number only to this page.</p>
 
-      <form id="card-form" novalidate>
-        <label class="field">
-          <span>Reader</span>
-          <div class="row">
-            <select id="reader" name="readerId" disabled>
-              <option value="">Any slot</option>
-            </select>
-            <button type="button" id="card-connect" class="secondary">Connect</button>
-          </div>
-        </label>
-
-        <fieldset class="field segmented">
-          <legend>Interface</legend>
-          <label><input type="radio" name="interface" value="auto" checked /><span>Auto</span></label>
-          <label><input type="radio" name="interface" value="contact" /><span>Contact</span></label>
-          <label><input type="radio" name="interface" value="contactless" /><span>Contactless</span></label>
-        </fieldset>
-        <p class="hint">Contact prefers the chip slot and asks for the contact directory (PSE) first. Contactless prefers the tap slot and asks for the contactless directory (PPSE) first. Auto uses whichever slot has a card. If that directory is not on the card, the other one is tried. Windows lists the two slots as two readers; a card in either slot of the same reader is accepted.</p>
-
-        <label class="field">
-          <span>Application (AID)</span>
-          <input type="text" name="aid" spellcheck="false" autocomplete="off" placeholder="Highest priority" />
-        </label>
-        <p class="hint">Optional. 5–16 bytes of hex; spaces are allowed. Blank selects the highest-priority application on the card.</p>
-
-        <label class="field">
-          <span>Wait for a card (ms)</span>
-          <input type="number" name="waitForCardMs" min="0" max="120000" step="1000" value="30000" />
-        </label>
-        <p class="hint">How long to wait for a card, from 0 to 120000 milliseconds. 0 fails at once if the reader is empty.</p>
-
-        <div class="row actions">
-          <button type="submit" id="read-card" class="primary">Read card</button>
-          <button type="button" id="card-start" class="secondary">Start</button>
-          <button type="button" id="card-stop" class="secondary" disabled>Stop</button>
-        </div>
-        <p class="hint">Start keeps reading until Stop. The next card is read only after the previous one has left the slot. The same reader, interface, application, and wait apply to every pass.</p>
-        <p id="card-progress" class="progress" aria-live="polite"></p>
-      </form>
-
-      <div id="card-error" class="notice error" role="alert" hidden></div>
+      <hb-read id="reader"></hb-read>
 
       <details class="howto">
         <summary>How this works</summary>

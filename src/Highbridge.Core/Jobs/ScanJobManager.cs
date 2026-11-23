@@ -42,7 +42,7 @@ public sealed class ScanJobManager : IDisposable
     /// </summary>
     public static readonly TimeSpan BarcodeWaitAfterScan = TimeSpan.FromSeconds(30);
 
-    private readonly IScannerBackend _backend;
+    private readonly IScannerBackend _scannerBackend;
     private readonly OriginRegistry _origins;
     private readonly TimeProvider _time;
     private readonly TimeSpan _retention;
@@ -56,7 +56,7 @@ public sealed class ScanJobManager : IDisposable
     private readonly ProvenanceStamping _provenance;
 
     public ScanJobManager(
-        IScannerBackend backend,
+        IScannerBackend scannerBackend,
         OriginRegistry origins,
         TimeProvider? time = null,
         TimeSpan? retention = null,
@@ -68,7 +68,7 @@ public sealed class ScanJobManager : IDisposable
     {
         _barcodeWorker = barcodeWorker ?? new BarcodeWorker();
         _logger = logger ?? NullLogger<ScanJobManager>.Instance;
-        _backend = backend;
+        _scannerBackend = scannerBackend;
         _origins = origins;
         _time = time ?? TimeProvider.System;
         _retention = retention ?? DefaultRetention;
@@ -111,11 +111,16 @@ public sealed class ScanJobManager : IDisposable
             throw new JobRejectedException("invalid_request_id", "request id must be 16-64 characters of [A-Za-z0-9_-].");
         }
 
-        var stamp = _provenance.Resolve(options.Stamp, _origins.ApprovalCoversIdentity(origin), out bool stampRequired);
-        var job = new ScanJob(id, origin, options with { Stamp = stamp }, trigger, _time.GetUtcNow())
+        if (!_origins.ApprovalCoversIdentity(origin))
         {
-            StampRequiredByPolicy = stampRequired,
-            ScanId = stamp is null ? null : ProvenanceStamping.NewScanId(),
+            throw new JobRejectedException(
+                "approval_required",
+                "Every scan includes your Windows user name and computer name. Approve this site again (POST /pair) to allow that.");
+        }
+
+        var job = new ScanJob(id, origin, options, trigger, _time.GetUtcNow())
+        {
+            ScanId = ProvenanceStamping.NewScanId(),
         };
         if (!_jobs.TryAdd(id, job))
         {
@@ -123,7 +128,7 @@ public sealed class ScanJobManager : IDisposable
         }
 
         _logger.LogInformation(
-            "Scan {JobId} started for {Origin} ({Trigger}): scanner={Scanner} dpi={Dpi} color={Color} source={Source} duplex={Duplex} oneSheet={OneSheet} driverUi={DriverUi} maxPages={MaxPages} barcodes={Barcodes}",
+            "Scan {JobId} started for {Origin} ({Trigger}): scanner={Scanner} dpi={Dpi} color={Color} source={Source} duplex={Duplex} maxPagesPerDocument={MaxPagesPerDocument} maxSheets={MaxSheets} orientation={Orientation} driverUi={DriverUi} barcodes={Barcodes}",
             job.Id,
             origin,
             trigger,
@@ -132,9 +137,10 @@ public sealed class ScanJobManager : IDisposable
             options.ColorMode,
             options.Source,
             options.Duplex,
-            options.OneSheet,
+            options.MaxPagesPerDocument,
+            options.MaxSheets,
+            options.Orientation,
             options.ShowDriverUi,
-            options.MaxPages,
             options.Barcodes);
         _ = Task.Run(() => RunAsync(job));
         return job;
@@ -193,25 +199,21 @@ public sealed class ScanJobManager : IDisposable
         _barcodeWorker.Dispose();
     }
 
-    /// <summary>Runs on the backend's thread (the TWAIN thread for real scanners), so it only queues work.</summary>
-    private void OnPage(ScanJob job, ScannedPage page, List<ReceivedPage> held)
+    /// <summary>Runs on the backend's thread (the TWAIN thread for real scanners), so it only copies.</summary>
+    private static void OnPage(ScanJob job, ScannedPage page, List<ReceivedPage> received)
     {
-        // Barcodes are read from a copy of the page exactly as the scanner delivered it.
-        // That copy is taken here, before a stamp replaces the image that gets published.
-        job.Barcodes?.Enqueue(page, _barcodeWorker, job.Cancellation.Token);
-        if (job.Stamp is null)
+        // Copy now. A backend may reuse or overwrite the buffer after the callback returns.
+        // Stacking and the stamp happen after the scan. The scanner orients the page.
+        var copy = new ScannedPage(page.Index, page.MediaType, page.Width, page.Height, page.Data.ToArray())
         {
-            job.AddPage(page);
-            return;
+            ScannerName = page.ScannerName,
+        };
+        lock (received)
+        {
+            received.Add(new ReceivedPage(copy, DateTimeOffset.UtcNow));
         }
 
-        // Never publish a page before it is stamped. The band says "page N of M".
-        lock (held)
-        {
-            held.Add(new ReceivedPage(page, _time.GetUtcNow()));
-        }
-
-        job.HoldPage();
+        job.NotePage();
     }
 
     private async Task RunAsync(ScanJob job)
@@ -241,31 +243,53 @@ public sealed class ScanJobManager : IDisposable
         try
         {
             job.SetStatus(ScanJobStatus.Scanning);
-            if (job.Options.OneSheet)
-            {
-                // The empty-feeder wait is not part of the scan timeout: a session stays armed
-                // until someone loads a sheet or cancels the job. The one-scan lock is unchanged.
-                job.UsedFeeder = job.Options.Source == PaperSource.Flatbed
-                    ? false
-                    : await _backend.WaitForFeederAsync(job.Options, ct).ConfigureAwait(false);
-            }
+            // The empty-feeder wait is not part of the scan timeout: the job stays armed until
+            // someone loads paper or cancels. A flatbed does not wait.
+            job.UsedFeeder = job.Options.Source == PaperSource.Flatbed
+                ? false
+                : await _scannerBackend.WaitForFeederAsync(job.Options, ct).ConfigureAwait(false);
 
-            var held = new List<ReceivedPage>();
-            var pages = await _backend.ScanAsync(job.Options, page => OnPage(job, page, held), ct).WaitAsync(_scanTimeout, _time, ct).ConfigureAwait(false);
+            var received = new List<ReceivedPage>();
+            var pages = await _scannerBackend.ScanAsync(job.Options, page => OnPage(job, page, received), ct).WaitAsync(_scanTimeout, _time, ct).ConfigureAwait(false);
             if (pages.Count == 0)
             {
                 Complete(job, ScanJobStatus.Failed, "no_pages", "The scanner returned no pages. Is there paper in the feeder?");
                 return;
             }
 
-            if (job.Stamp is { } stamp)
+            IReadOnlyList<ScannedPage> delivered;
+            lock (received)
             {
-                await StampAsync(job, stamp, pages, held, ct).ConfigureAwait(false);
+                delivered = received.Count == pages.Count
+                    ? received.Select(item => item.Page).ToArray()
+                    : pages.Select(page => new ScannedPage(page.Index, page.MediaType, page.Width, page.Height, page.Data.ToArray()) { ScannerName = page.ScannerName }).ToArray();
             }
 
+            IReadOnlyList<ScannedDocument> documents;
+            try
+            {
+                documents = ScanDocuments.Build(delivered, job.Options);
+            }
+            catch (Exception ex) when (ex is InvalidDataException or NotSupportedException)
+            {
+                throw new ScannerException("stamp_failed", "highbridge could not add the provenance record, so no pages were returned.", ex);
+            }
             if (job.Barcodes is { } barcodes)
             {
-                await barcodes.WaitAsync(BarcodeWaitAfterScan, _time).WaitAsync(ct).ConfigureAwait(false);
+                // The stack is already in its final orientation. Search that image, not each side,
+                // and do not spend the budget turning it again.
+                foreach (var document in documents)
+                {
+                    barcodes.Enqueue(new ScannedPage(document.Index, document.MediaType, document.Width, document.Height, document.Data), _barcodeWorker, ct, orientationApplied: true);
+                }
+            }
+
+            documents = await StampAsync(job, documents, ct).ConfigureAwait(false);
+
+            job.SetDocuments(documents);
+            if (job.Barcodes is { } pending)
+            {
+                await pending.WaitAsync(BarcodeWaitAfterScan, _time).WaitAsync(ct).ConfigureAwait(false);
             }
 
             Complete(job, ScanJobStatus.Completed);
@@ -296,29 +320,26 @@ public sealed class ScanJobManager : IDisposable
         }
     }
 
-    private async Task StampAsync(ScanJob job, StampOptions stamp, IReadOnlyList<ScannedPage> pages, List<ReceivedPage> held, CancellationToken ct)
+    private async Task<IReadOnlyList<ScannedDocument>> StampAsync(ScanJob job, IReadOnlyList<ScannedDocument> documents, CancellationToken ct)
     {
-        IReadOnlyList<ReceivedPage> received;
-        lock (held)
-        {
-            var now = _time.GetUtcNow();
-            received = held.Count == pages.Count ? held.ToArray() : pages.Select(p => new ReceivedPage(p, now)).ToArray();
-        }
-
-        string scanner = received.All(p => !string.IsNullOrWhiteSpace(p.Page.ScannerName))
+        string scanner = documents.All(document => !string.IsNullOrWhiteSpace(document.ScannerName))
             ? string.Empty
             : await ScannerNameAsync(job.Options.ScannerId, ct).ConfigureAwait(false);
+        var now = _time.GetUtcNow();
+        var received = documents.Select(document => new ReceivedPage(
+            new ScannedPage(document.Index, document.MediaType, document.Width, document.Height, document.Data) { ScannerName = document.ScannerName },
+            now)).ToArray();
         var stamped = await Task.Run(
-            () => _provenance.StampAll(received, stamp, job.Origin, job.ScanId!, scanner, job.Options.Dpi, _time.LocalTimeZone),
+            () => _provenance.StampAll(received, job.Origin, job.ScanId, scanner, _time.LocalTimeZone),
             ct).ConfigureAwait(false);
-        job.ReleaseHeldPages(stamped);
+        return stamped.Select((page, index) => documents[index].Stamped(page.Data, page.Width, page.Height, page.Provenance!)).ToArray();
     }
 
     private async Task<string> ScannerNameAsync(string? scannerId, CancellationToken ct)
     {
         try
         {
-            var scanners = await _backend.ListScannersAsync(ct).ConfigureAwait(false);
+            var scanners = await _scannerBackend.ListScannersAsync(ct).ConfigureAwait(false);
             var match = scanners.FirstOrDefault(s => scannerId is null ? s.IsDefault : s.Id == scannerId);
             if (match is not null)
             {
@@ -342,7 +363,7 @@ public sealed class ScanJobManager : IDisposable
                 job.Id,
                 status,
                 code ?? "",
-                job.Pages.Count);
+                job.Documents.Count);
             JobFinished?.Invoke(job);
         }
     }

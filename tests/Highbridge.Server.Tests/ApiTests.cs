@@ -39,7 +39,7 @@ public sealed class ApiTests : IAsyncLifetime
     [Fact]
     public async Task Rejects_requests_with_a_foreign_host_header()
     {
-        var request = Request(HttpMethod.Get, "/v1/status", Site);
+        var request = Request(HttpMethod.Get, "/status", Site);
         request.Headers.Host = "attacker.example:47116";
 
         var response = await _http.SendAsync(request);
@@ -55,7 +55,7 @@ public sealed class ApiTests : IAsyncLifetime
     [InlineData("file://")]
     public async Task Rejects_missing_or_insecure_origins_without_cors(string? origin)
     {
-        var response = await _http.SendAsync(Request(HttpMethod.Get, "/v1/status", origin));
+        var response = await _http.SendAsync(Request(HttpMethod.Get, "/status", origin));
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         Assert.False(response.Headers.Contains("Access-Control-Allow-Origin"));
@@ -65,7 +65,7 @@ public sealed class ApiTests : IAsyncLifetime
     [Fact]
     public async Task Answers_cors_and_private_network_preflight_for_https_origins()
     {
-        var request = Request(HttpMethod.Options, "/v1/scans", Site);
+        var request = Request(HttpMethod.Options, "/scanner", Site);
         request.Headers.Add("Access-Control-Request-Method", "POST");
         request.Headers.Add("Access-Control-Request-Headers", "content-type");
         request.Headers.Add("Access-Control-Request-Private-Network", "true");
@@ -82,61 +82,63 @@ public sealed class ApiTests : IAsyncLifetime
     [Fact]
     public async Task Status_is_readable_by_unpaired_sites_but_scanning_is_not()
     {
-        var status = await GetJson<StatusResponse>("/v1/status", Site);
+        var status = await GetJson<StatusResponse>("/status", Site);
         Assert.Equal("highbridge", status.App);
         Assert.Equal("mock", status.Backend);
         Assert.False(status.Paired);
 
-        var scanners = await _http.SendAsync(Request(HttpMethod.Get, "/v1/scanners", Site));
+        var scanners = await _http.SendAsync(Request(HttpMethod.Get, "/scanner", Site));
         Assert.Equal(HttpStatusCode.Forbidden, scanners.StatusCode);
         Assert.Equal(Site, scanners.Headers.GetValues("Access-Control-Allow-Origin").Single());
         Assert.Equal("origin_not_paired", (await Error(scanners)).Error);
 
-        var scan = await _http.SendAsync(Request(HttpMethod.Post, "/v1/scans", Site));
+        var scan = await _http.SendAsync(Request(HttpMethod.Post, "/scanner", Site));
         Assert.Equal("origin_not_paired", (await Error(scan)).Error);
     }
 
     [Fact]
     public async Task Full_flow_pair_scan_poll_download_delete()
     {
-        var pair = await _http.SendAsync(Request(HttpMethod.Post, "/v1/pair", Site));
+        var pair = await _http.SendAsync(Request(HttpMethod.Post, "/pair", Site));
         Assert.Equal(HttpStatusCode.OK, pair.StatusCode);
-        Assert.True((await GetJson<StatusResponse>("/v1/status", Site)).Paired);
+        Assert.True((await GetJson<StatusResponse>("/status", Site)).Paired);
 
-        var scanners = await GetJson<ScannersResponse>("/v1/scanners", Site);
+        var scanners = await GetJson<ScannersResponse>("/scanner", Site);
         Assert.Contains(scanners.Scanners, s => s.Id == MockScannerBackend.FeederId && s.IsDefault);
 
-        var create = Request(HttpMethod.Post, "/v1/scans", Site);
+        var create = Request(HttpMethod.Post, "/scanner", Site);
         create.Content = JsonContent.Create(new { dpi = 150, colorMode = "gray", source = "feeder", duplex = true });
         var created = await _http.SendAsync(create);
         Assert.Equal(HttpStatusCode.Accepted, created.StatusCode);
         var job = await Json<ScanJobResponse>(created);
-        Assert.Equal($"/v1/scans/{job.Id}", created.Headers.Location!.OriginalString);
+        Assert.Equal($"/scanner/{job.Id}", created.Headers.Location!.OriginalString);
 
         job = await PollUntilFinished(job.Id, Site);
         Assert.Equal(Jobs.ScanJobStatus.Completed, job.Status);
         Assert.Equal(OutputFormat.Png, job.Format);
-        Assert.Equal(4, job.Pages.Count);
+        Assert.Equal(4, job.PagesScanned);
+        var document = Assert.Single(job.Documents);
+        Assert.Equal(4, document.PageCount);
 
-        var page = await _http.SendAsync(Request(HttpMethod.Get, job.Pages[1].Url, Site));
+        var page = await _http.SendAsync(Request(HttpMethod.Get, document.Url, Site));
         Assert.Equal("image/png", page.Content.Headers.ContentType!.MediaType);
         byte[] png = await page.Content.ReadAsByteArrayAsync();
         Assert.True(PngEncoder.TryReadSize(png, out int w, out int h));
-        Assert.Equal((job.Pages[1].Width, job.Pages[1].Height), (w, h));
-        Assert.Equal(job.Pages[1].Size, png.Length);
+        Assert.Equal((document.Width, document.Height), (w, h));
+        Assert.Equal(document.Size, png.Length);
 
-        Assert.Equal(HttpStatusCode.NoContent, (await _http.SendAsync(Request(HttpMethod.Delete, $"/v1/scans/{job.Id}", Site))).StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, (await _http.SendAsync(Request(HttpMethod.Get, $"/v1/scans/{job.Id}", Site))).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await _http.SendAsync(Request(HttpMethod.Delete, $"/scanner/{job.Id}", Site))).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await _http.SendAsync(Request(HttpMethod.Get, $"/scanner/{job.Id}", Site))).StatusCode);
     }
 
     [Fact]
     public async Task Paired_site_scans_repeatedly_with_only_the_one_pairing_prompt()
     {
-        await _http.SendAsync(Request(HttpMethod.Post, "/v1/pair", Site));
+        await _http.SendAsync(Request(HttpMethod.Post, "/pair", Site));
 
         for (int i = 0; i < 3; i++)
         {
-            var job = await Json<ScanJobResponse>(await _http.SendAsync(Request(HttpMethod.Post, "/v1/scans", Site)));
+            var job = await Json<ScanJobResponse>(await _http.SendAsync(Request(HttpMethod.Post, "/scanner", Site)));
             Assert.Equal(Jobs.ScanJobStatus.Completed, (await PollUntilFinished(job.Id, Site)).Status);
         }
 
@@ -151,7 +153,7 @@ public sealed class ApiTests : IAsyncLifetime
         string id = Jobs.ScanJobManager.NewId();
         _runtime.HandleProtocolUrl(Protocol.HighbridgeUri.BuildScan(Site, id, new ScanOptions { Source = PaperSource.Flatbed }));
 
-        Assert.Equal(HttpStatusCode.NotFound, (await _http.SendAsync(Request(HttpMethod.Get, $"/v1/scans/{id}", OtherSite))).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await _http.SendAsync(Request(HttpMethod.Get, $"/scanner/{id}", OtherSite))).StatusCode);
         await Task.Delay(50);
         Assert.False(_runtime.Jobs.Get(id, Site)!.IsClaimed);
 
@@ -159,7 +161,7 @@ public sealed class ApiTests : IAsyncLifetime
 
         Assert.Equal(Jobs.ScanJobStatus.Completed, job.Status);
         Assert.Equal(Jobs.ScanTrigger.ProtocolUrl, job.Trigger);
-        Assert.Single(job.Pages);
+        Assert.Single(job.Documents);
     }
 
     [Fact]
@@ -167,12 +169,12 @@ public sealed class ApiTests : IAsyncLifetime
     {
         _runtime.Origins.Pair(Site);
         _runtime.Origins.Pair(OtherSite);
-        var created = await _http.SendAsync(Request(HttpMethod.Post, "/v1/scans", Site));
+        var created = await _http.SendAsync(Request(HttpMethod.Post, "/scanner", Site));
         var job = await Json<ScanJobResponse>(created);
 
-        Assert.Equal(HttpStatusCode.NotFound, (await _http.SendAsync(Request(HttpMethod.Get, $"/v1/scans/{job.Id}", OtherSite))).StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, (await _http.SendAsync(Request(HttpMethod.Get, $"/v1/scans/{job.Id}/pages/0", OtherSite))).StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, (await _http.SendAsync(Request(HttpMethod.Delete, $"/v1/scans/{job.Id}", OtherSite))).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await _http.SendAsync(Request(HttpMethod.Get, $"/scanner/{job.Id}", OtherSite))).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await _http.SendAsync(Request(HttpMethod.Get, $"/scanner/{job.Id}/documents/0", OtherSite))).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await _http.SendAsync(Request(HttpMethod.Delete, $"/scanner/{job.Id}", OtherSite))).StatusCode);
     }
 
     [Fact]
@@ -180,8 +182,8 @@ public sealed class ApiTests : IAsyncLifetime
     {
         await RestartAsync(consent: new FixedConsentService(allow: false));
 
-        var first = await _http.SendAsync(Request(HttpMethod.Post, "/v1/pair", Site));
-        var second = await _http.SendAsync(Request(HttpMethod.Post, "/v1/pair", Site));
+        var first = await _http.SendAsync(Request(HttpMethod.Post, "/pair", Site));
+        var second = await _http.SendAsync(Request(HttpMethod.Post, "/pair", Site));
 
         Assert.Equal("pairing_denied", (await Error(first)).Error);
         Assert.Equal("pairing_denied", (await Error(second)).Error);
@@ -193,11 +195,11 @@ public sealed class ApiTests : IAsyncLifetime
     {
         await RestartAsync(policy: new HighbridgePolicy { AllowPairing = false, AllowedOrigins = [OtherSite] });
 
-        var pair = await _http.SendAsync(Request(HttpMethod.Post, "/v1/pair", Site));
+        var pair = await _http.SendAsync(Request(HttpMethod.Post, "/pair", Site));
         Assert.Equal("pairing_disabled", (await Error(pair)).Error);
         Assert.Equal(0, Consent.PairingRequests);
 
-        var status = await GetJson<StatusResponse>("/v1/status", OtherSite);
+        var status = await GetJson<StatusResponse>("/status", OtherSite);
         Assert.True(status.Paired);
         Assert.False(status.PairingAllowed);
     }
@@ -206,25 +208,25 @@ public sealed class ApiTests : IAsyncLifetime
     public async Task Policy_can_reject_http_localhost_pages()
     {
         await RestartAsync(policy: new HighbridgePolicy { AllowInsecureLoopbackOrigins = false });
-        var response = await _http.SendAsync(Request(HttpMethod.Get, "/v1/status", "http://localhost:47200"));
+        var response = await _http.SendAsync(Request(HttpMethod.Get, "/status", "http://localhost:47200"));
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]
-    public async Task Barcode_request_returns_per_page_and_flat_results()
+    public async Task Barcode_request_returns_codes_on_their_document()
     {
         _runtime.Origins.Pair(Site);
-        var create = Request(HttpMethod.Post, "/v1/scans", Site);
-        create.Content = JsonContent.Create(new { scannerId = MockScannerBackend.BarcodesId, dpi = 120, barcodes = true, maxPages = 1 });
+        var create = Request(HttpMethod.Post, "/scanner", Site);
+        create.Content = JsonContent.Create(new { scannerId = MockScannerBackend.BarcodesId, dpi = 120, barcodes = true, maxSheets = 1 });
 
         // A full-page search can outlast the product's 3s below-normal budget on a busy CI runner.
         var job = await PollUntilFinished((await Json<ScanJobResponse>(await _http.SendAsync(create))).Id, Site, TimeSpan.FromSeconds(25));
 
         Assert.Equal(Jobs.ScanJobStatus.Completed, job.Status);
-        Assert.Equal(BarcodeStatus.Done, job.Pages[0].BarcodeStatus);
-        var barcodes = Assert.IsAssignableFrom<IReadOnlyList<BarcodeResult>>(job.Barcodes);
-        Assert.Equal(barcodes.Select(b => b.Text).Order(), job.Pages[0].Barcodes!.Select(b => b.Text).Order());
-        Assert.Contains(barcodes, b => b.Format == BarcodeFormat.Code128 && b.Rotation == 90 && b.Orientation == 270);
+        Assert.Equal(BarcodeStatus.Done, job.Documents[0].BarcodeStatus);
+        var barcodes = job.Documents[0].Barcodes!;
+        Assert.Contains(barcodes, b => b.Format == BarcodeFormat.Code128 && b.Rotation == 0);
+        Assert.DoesNotContain(barcodes, b => b.Text.Contains("R270", StringComparison.Ordinal));
         Assert.All(barcodes, b => Assert.True(b.Points.Count >= 2));
     }
 
@@ -232,10 +234,10 @@ public sealed class ApiTests : IAsyncLifetime
     public async Task A_scan_without_barcodes_omits_them()
     {
         _runtime.Origins.Pair(Site);
-        var job = await PollUntilFinished((await Json<ScanJobResponse>(await _http.SendAsync(Request(HttpMethod.Post, "/v1/scans", Site)))).Id, Site);
+        var job = await PollUntilFinished((await Json<ScanJobResponse>(await _http.SendAsync(Request(HttpMethod.Post, "/scanner", Site)))).Id, Site);
 
-        Assert.Null(job.Barcodes);
-        Assert.All(job.Pages, p => Assert.Null(p.BarcodeStatus));
+        Assert.All(job.Documents, p => Assert.Null(p.BarcodeStatus));
+        Assert.All(job.Documents, p => Assert.Null(p.Barcodes));
     }
 
     [Theory]
@@ -249,7 +251,7 @@ public sealed class ApiTests : IAsyncLifetime
     public async Task Invalid_scan_options_are_rejected(string body)
     {
         _runtime.Origins.Pair(Site);
-        var request = Request(HttpMethod.Post, "/v1/scans", Site);
+        var request = Request(HttpMethod.Post, "/scanner", Site);
         request.Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
 
         var response = await _http.SendAsync(request);
@@ -262,7 +264,7 @@ public sealed class ApiTests : IAsyncLifetime
     public async Task Scanner_failures_surface_as_job_errors()
     {
         _runtime.Origins.Pair(Site);
-        var create = Request(HttpMethod.Post, "/v1/scans", Site);
+        var create = Request(HttpMethod.Post, "/scanner", Site);
         create.Content = JsonContent.Create(new { scannerId = MockScannerBackend.JammedId });
         var job = await Json<ScanJobResponse>(await _http.SendAsync(create));
 
@@ -273,83 +275,49 @@ public sealed class ApiTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Stamped_scan_returns_provenance_and_embeds_it_in_each_page()
+    public async Task Every_scan_returns_provenance_and_embeds_it_in_each_page()
     {
         _runtime.Origins.Pair(Site);
-        var create = Request(HttpMethod.Post, "/v1/scans", Site);
-        create.Content = JsonContent.Create(new { source = "feeder", stamp = new { position = "top" } });
+        var create = Request(HttpMethod.Post, "/scanner", Site);
+        create.Content = JsonContent.Create(new { source = "feeder", stamp = new { position = "top", user = "someone else" } });
         var created = await Json<ScanJobResponse>(await _http.SendAsync(create));
-        Assert.Equal(Provenance.StampPosition.Top, created.Stamp!.Position);
-        Assert.False(created.Stamp.RequiredByPolicy);
+        Assert.Matches("^HB-", created.ScanId);
 
         var job = await PollUntilFinished(created.Id, Site);
 
         Assert.Equal(Jobs.ScanJobStatus.Completed, job.Status);
         Assert.Equal(2, job.PagesScanned);
-        foreach (var info in job.Pages)
-        {
-            var provenance = info.Provenance!;
-            Assert.Equal((Site, created.Stamp.ScanId, job.Pages.Count), (provenance.Origin, provenance.ScanId, provenance.PageCount));
-            Assert.Equal(Environment.MachineName, provenance.Workstation);
-            Assert.EndsWith("\\" + Environment.UserName, provenance.User);
+        var document = Assert.Single(job.Documents);
+        Assert.Equal(2, document.PageCount);
+        var provenance = document.Provenance!;
+        Assert.Equal((Site, created.ScanId, 1), (provenance.Origin, provenance.ScanId, provenance.PageCount));
+        Assert.Equal(1, provenance.Page);
+        Assert.Equal(Environment.MachineName, provenance.Workstation);
+        Assert.EndsWith("\\" + Environment.UserName, provenance.User);
+        Assert.DoesNotContain("someone else", provenance.User);
 
-            byte[] png = await (await _http.SendAsync(Request(HttpMethod.Get, info.Url, Site))).Content.ReadAsByteArrayAsync();
-            var check = Provenance.ProvenanceVerifier.Verify(png);
-            Assert.True(check.Valid, check.Problem);
-            Assert.Equal(provenance, check.Provenance);
-        }
-    }
-
-    [Theory]
-    [InlineData("{\"stamp\": {\"position\": \"top\", \"text\": \"Signed by the CEO\"}}")]
-    [InlineData("{\"stamp\": {\"user\": \"someone else\"}}")]
-    [InlineData("{\"stamp\": {\"position\": \"left\"}}")]
-    [InlineData("{\"stamp\": true}")]
-    public async Task Pages_cannot_supply_provenance_values(string body)
-    {
-        _runtime.Origins.Pair(Site);
-        var request = Request(HttpMethod.Post, "/v1/scans", Site);
-        request.Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
-
-        var response = await _http.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal("invalid_options", (await Error(response)).Error);
+        byte[] png = await (await _http.SendAsync(Request(HttpMethod.Get, document.Url, Site))).Content.ReadAsByteArrayAsync();
+        var check = Provenance.ProvenanceVerifier.Verify(png);
+        Assert.True(check.Valid, check.Problem);
+        Assert.Equal(provenance, check.Provenance);
     }
 
     [Fact]
-    public async Task Site_approved_under_old_wording_is_asked_again_before_its_first_stamped_scan()
+    public async Task Site_approved_under_old_wording_is_asked_again_before_its_first_scan()
     {
         _runtime.Settings.Update(s => s.PairedOrigins.Add(new PairedOrigin { Origin = Site }));
-        Assert.True((await GetJson<StatusResponse>("/v1/status", Site)).Paired);
+        Assert.True((await GetJson<StatusResponse>("/status", Site)).Paired);
 
-        var stamped = Request(HttpMethod.Post, "/v1/scans", Site);
-        stamped.Content = JsonContent.Create(new { stamp = new { } });
-        var rejected = await _http.SendAsync(stamped);
+        var rejected = await _http.SendAsync(Request(HttpMethod.Post, "/scanner", Site));
         Assert.Equal(HttpStatusCode.Forbidden, rejected.StatusCode);
         Assert.Equal("approval_required", (await Error(rejected)).Error);
 
-        Assert.Equal(HttpStatusCode.OK, (await _http.SendAsync(Request(HttpMethod.Post, "/v1/pair", Site))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await _http.SendAsync(Request(HttpMethod.Post, "/pair", Site))).StatusCode);
         Assert.Equal(1, Consent.PairingRequests);
-        Assert.Equal(HttpStatusCode.OK, (await _http.SendAsync(Request(HttpMethod.Post, "/v1/pair", Site))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await _http.SendAsync(Request(HttpMethod.Post, "/pair", Site))).StatusCode);
         Assert.Equal(1, Consent.PairingRequests);
 
-        var retry = Request(HttpMethod.Post, "/v1/scans", Site);
-        retry.Content = JsonContent.Create(new { stamp = new { } });
-        Assert.Equal(HttpStatusCode.Accepted, (await _http.SendAsync(retry)).StatusCode);
-    }
-
-    [Fact]
-    public async Task Policy_required_stamp_applies_to_scans_that_did_not_ask()
-    {
-        await RestartAsync(policy: new HighbridgePolicy { ProvenanceStamp = new Provenance.ProvenanceStampPolicy { Mode = Provenance.StampMode.Required } });
-        _runtime.Origins.Pair(Site);
-
-        var created = await Json<ScanJobResponse>(await _http.SendAsync(Request(HttpMethod.Post, "/v1/scans", Site)));
-        var job = await PollUntilFinished(created.Id, Site);
-
-        Assert.True(job.Stamp!.RequiredByPolicy);
-        Assert.All(job.Pages, p => Assert.Equal(Provenance.StampPosition.Bottom, p.Provenance!.Position));
+        Assert.Equal(HttpStatusCode.Accepted, (await _http.SendAsync(Request(HttpMethod.Post, "/scanner", Site))).StatusCode);
     }
 
     [Fact]
@@ -360,24 +328,24 @@ public sealed class ApiTests : IAsyncLifetime
         var second = await FinishedOneSheet();
 
         Assert.Equal(Jobs.ScanJobStatus.Completed, first.Status);
-        Assert.Equal(2, first.Pages.Count);
+        Assert.Equal(2, Assert.Single(first.Documents).PageCount);
         Assert.True(first.UsedFeeder);
-        Assert.Equal(2, second.Pages.Count);
+        Assert.Equal(2, Assert.Single(second.Documents).PageCount);
 
-        var create = Request(HttpMethod.Post, "/v1/scans", Site);
-        create.Content = JsonContent.Create(new { source = "feeder", duplex = true, oneSheet = true });
+        var create = Request(HttpMethod.Post, "/scanner", Site);
+        create.Content = JsonContent.Create(new { source = "feeder", duplex = true, maxSheets = 1 });
         var third = await Json<ScanJobResponse>(await _http.SendAsync(create));
         await Task.Delay(150);
-        var pending = await GetJson<ScanJobResponse>($"/v1/scans/{third.Id}", Site);
+        var pending = await GetJson<ScanJobResponse>($"/scanner/{third.Id}", Site);
         Assert.Null(pending.FinishedAt);
         Assert.Equal(Jobs.ScanJobStatus.Scanning, pending.Status);
-        Assert.Equal(HttpStatusCode.NoContent, (await _http.SendAsync(Request(HttpMethod.Delete, $"/v1/scans/{third.Id}", Site))).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await _http.SendAsync(Request(HttpMethod.Delete, $"/scanner/{third.Id}", Site))).StatusCode);
     }
 
     private async Task<ScanJobResponse> FinishedOneSheet()
     {
-        var create = Request(HttpMethod.Post, "/v1/scans", Site);
-        create.Content = JsonContent.Create(new { source = "feeder", duplex = true, oneSheet = true });
+        var create = Request(HttpMethod.Post, "/scanner", Site);
+        create.Content = JsonContent.Create(new { source = "feeder", duplex = true, maxSheets = 1 });
         var created = await Json<ScanJobResponse>(await _http.SendAsync(create));
         return await PollUntilFinished(created.Id, Site);
     }
@@ -432,7 +400,7 @@ public sealed class ApiTests : IAsyncLifetime
         var clock = Stopwatch.StartNew();
         while (clock.Elapsed < wait)
         {
-            var job = await GetJson<ScanJobResponse>($"/v1/scans/{id}", origin);
+            var job = await GetJson<ScanJobResponse>($"/scanner/{id}", origin);
             if (job.FinishedAt is not null)
             {
                 return job;

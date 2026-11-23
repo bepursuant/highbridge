@@ -40,7 +40,13 @@ public static class BarcodeDetector
     /// </summary>
     public const long MaxPixels = 12_000_000;
 
-    public static BarcodeDetection Detect(LuminanceImage page, int pageIndex, BarcodeFormat formats, TimeSpan budget, CancellationToken cancellationToken = default)
+    public static BarcodeDetection Detect(
+        LuminanceImage page,
+        int pageIndex,
+        BarcodeFormat formats,
+        TimeSpan budget,
+        CancellationToken cancellationToken = default,
+        bool orientationApplied = false)
     {
         var clock = Stopwatch.StartNew();
         int scale = 1;
@@ -53,7 +59,9 @@ public static class BarcodeDetector
         var found = new List<BarcodeResult>();
         int passes = 0;
         var outcome = BarcodeDetectionOutcome.Complete;
-        foreach (int rotation in Rotations)
+        // The scan has already turned each page. Spend the remaining budget on a wide Code 128
+        // instead of searching the same pixels at 90, 180 and 270.
+        foreach (int rotation in orientationApplied ? [0] : Rotations)
         {
             var passFormats = rotation == 0 ? formats & ~(BarcodeFormat.Pdf417 | CenterSeeking) : formats & ~AnyAngle;
             bool pdf417 = rotation == 0 && (formats & BarcodeFormat.Pdf417) != 0;
@@ -103,8 +111,138 @@ public static class BarcodeDetector
             }
         }
 
+        if (orientationApplied && (formats & BarcodeFormat.Code128) != 0)
+        {
+            SearchWideCode128(page, pageIndex, found, ref passes, ref outcome, clock, budget, cancellationToken);
+        }
+
         found.RemoveAll(b => IsInsideLongerLinearCode(b, found));
         return new BarcodeDetection(found, outcome, clock.Elapsed, passes);
+    }
+
+    /// <summary>
+    /// Faded thermal Code 128 is wide (about 4 to 5 inches) and short. Shrinking the whole page
+    /// until it fits the pixel budget erases those bars, so each pass is a full-width strip at
+    /// the page's own resolution: the strip as scanned, a contrast stretch, and an invert.
+    /// </summary>
+    private static void SearchWideCode128(
+        LuminanceImage page,
+        int pageIndex,
+        List<BarcodeResult> found,
+        ref int passes,
+        ref BarcodeDetectionOutcome outcome,
+        Stopwatch clock,
+        TimeSpan budget,
+        CancellationToken cancellationToken)
+    {
+        int stripHeight = page.Width == 0
+            ? page.Height
+            : (int)Math.Min(page.Height, Math.Max(32, MaxPixels / page.Width));
+        int step = Math.Max(1, Math.Min(stripHeight / 2, Math.Max(32, page.Width / 8)));
+        var reader = CreateReader(BarcodeFormat.Code128, tryInverted: false);
+        for (int top = 0; top < page.Height; top += step)
+        {
+            int height = Math.Min(stripHeight, page.Height - top);
+            if (height < 8)
+            {
+                break;
+            }
+
+            var strip = CropRows(page, top, height);
+            foreach (var variant in Code128Variants(strip))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (passes > 0 && clock.Elapsed + (clock.Elapsed / passes) > budget)
+                {
+                    outcome = BarcodeDetectionOutcome.Partial;
+                    return;
+                }
+
+                var results = reader.DecodeMultiple(new GrayLuminanceSource(variant)) ?? [];
+                passes++;
+                foreach (var result in results)
+                {
+                    if (ToBarcode(ShiftY(result, top), page, rotation: 0, pageIndex, scale: 1) is { } barcode
+                        && barcode.Format == BarcodeFormat.Code128
+                        && !IsDuplicate(found, barcode))
+                    {
+                        found.Add(barcode);
+                    }
+                }
+            }
+
+            if (top + height >= page.Height)
+            {
+                break;
+            }
+        }
+    }
+
+    private static IEnumerable<LuminanceImage> Code128Variants(LuminanceImage strip)
+    {
+        yield return strip;
+        yield return MapPixels(strip, static value => (byte)(255 - value));
+        var stretched = ContrastStretch(strip);
+        if (!ReferenceEquals(stretched, strip))
+        {
+            yield return stretched;
+        }
+    }
+
+    /// <summary>Spreads a faded thermal code (bars and paper only a few levels apart) across 0–255.</summary>
+    private static LuminanceImage ContrastStretch(LuminanceImage image)
+    {
+        int min = 255;
+        int max = 0;
+        foreach (byte value in image.Pixels)
+        {
+            if (value < min)
+            {
+                min = value;
+            }
+
+            if (value > max)
+            {
+                max = value;
+            }
+        }
+
+        int range = max - min;
+        if (range < 12)
+        {
+            return image;
+        }
+
+        return MapPixels(image, value => (byte)((value - min) * 255 / range));
+    }
+
+    private static LuminanceImage MapPixels(LuminanceImage image, Func<byte, byte> map)
+    {
+        var pixels = new byte[image.Pixels.Length];
+        for (int i = 0; i < pixels.Length; i++)
+        {
+            pixels[i] = map(image.Pixels[i]);
+        }
+
+        return new LuminanceImage(image.Width, image.Height, pixels);
+    }
+
+    private static LuminanceImage CropRows(LuminanceImage image, int top, int height)
+    {
+        var pixels = new byte[image.Width * height];
+        Buffer.BlockCopy(image.Pixels, top * image.Width, pixels, 0, pixels.Length);
+        return new LuminanceImage(image.Width, height, pixels);
+    }
+
+    private static Result ShiftY(Result result, int top)
+    {
+        if (top == 0)
+        {
+            return result;
+        }
+
+        var points = result.ResultPoints.Select(point => point is null ? null! : new ResultPoint(point.X, point.Y + top)).ToArray();
+        return new Result(result.Text, result.RawBytes, points, result.BarcodeFormat);
     }
 
     /// <summary>

@@ -34,10 +34,10 @@ public sealed class BarcodeWorker : IDisposable
     public TimeSpan PageBudget { get; }
 
     /// <summary>Queues <paramref name="page"/>; the task completes with its barcodes and never faults.</summary>
-    public Task<PageBarcodes> EnqueueAsync(ScannedPage page, BarcodeFormat formats, CancellationToken cancellationToken)
+    public Task<PageBarcodes> EnqueueAsync(ScannedPage page, BarcodeFormat formats, CancellationToken cancellationToken, bool orientationApplied = false)
     {
         EnsureStarted();
-        var item = new Item(page, formats, cancellationToken, new TaskCompletionSource<PageBarcodes>(TaskCreationOptions.RunContinuationsAsynchronously));
+        var item = new Item(page, formats, cancellationToken, orientationApplied, new TaskCompletionSource<PageBarcodes>(TaskCreationOptions.RunContinuationsAsynchronously));
         if (!_queue.Writer.TryWrite(item))
         {
             item.Result.TrySetResult(PageBarcodes.Skipped);
@@ -87,7 +87,7 @@ public sealed class BarcodeWorker : IDisposable
         try
         {
             var image = PngDecoder.DecodeLuminance(item.Page.Data);
-            var detection = BarcodeDetector.Detect(image, item.Page.Index, item.Formats, PageBudget, item.Cancellation);
+            var detection = BarcodeDetector.Detect(image, item.Page.Index, item.Formats, PageBudget, item.Cancellation, item.OrientationApplied);
             var status = detection.Outcome == BarcodeDetectionOutcome.Complete ? BarcodeStatus.Done : BarcodeStatus.Partial;
             _logger.LogInformation("Barcodes on page {Page}: {Count} in {Milliseconds:F0} ms ({Passes} passes, {Status})",
                 item.Page.Index + 1, detection.Barcodes.Count, detection.Elapsed.TotalMilliseconds, detection.Passes, status);
@@ -104,5 +104,5 @@ public sealed class BarcodeWorker : IDisposable
         }
     }
 
-    private sealed record Item(ScannedPage Page, BarcodeFormat Formats, CancellationToken Cancellation, TaskCompletionSource<PageBarcodes> Result);
+    private sealed record Item(ScannedPage Page, BarcodeFormat Formats, CancellationToken Cancellation, bool OrientationApplied, TaskCompletionSource<PageBarcodes> Result);
 }

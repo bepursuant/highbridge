@@ -56,7 +56,7 @@ public class CardReadTests
     public async Task The_next_read_waits_until_the_card_has_left_the_slot()
     {
         var backend = new MockCardReaderBackend { CardPresent = true };
-        using var runtime = TestRuntime.Create(cardReader: backend);
+        using var runtime = TestRuntime.Create(cardReaderBackend: backend);
         runtime.Origins.Pair(Origin);
 
         var first = runtime.CardReads.Start(Origin, new CardReadOptions { Interface = CardInterface.Auto }, CardReadTrigger.Api);
@@ -66,8 +66,7 @@ public class CardReadTests
         Assert.DoesNotContain(MockCardReaderBackend.VisaPan, first.ToString(), StringComparison.Ordinal);
 
         var next = runtime.CardReads.Start(Origin, new CardReadOptions { Interface = CardInterface.Auto, WaitForRemoval = true }, CardReadTrigger.Api);
-        await Task.Delay(80);
-        Assert.Equal(CardReadStatus.Reading, next.Status);
+        await WaitUntilReading(next);
         Assert.Null(next.Result);
 
         backend.CardPresent = false;
@@ -114,12 +113,12 @@ public class CardReadTests
     {
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var runtime = TestRuntime.Create(cardReader: new GatedCards(started, release));
+        using var runtime = TestRuntime.Create(cardReaderBackend: new GatedCards(started, release));
         runtime.Origins.Pair(Origin);
 
         var read = runtime.CardReads.Start(Origin, new CardReadOptions(), CardReadTrigger.Api);
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var scan = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Flatbed, MaxPages = 1 }, ScanTrigger.Api);
+        var scan = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Flatbed, MaxSheets = 1 }, ScanTrigger.Api);
         await scan.Finished.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.Equal(ScanJobStatus.Completed, scan.Status);
@@ -131,7 +130,7 @@ public class CardReadTests
     }
 
     [Fact]
-    public void Disabled_policy_blocks_card_reads_and_leaves_scans_alone()
+    public async Task Disabled_policy_blocks_card_reads_and_leaves_scans_alone()
     {
         var policy = new HighbridgePolicy { CardReader = new CardReaderPolicy { Mode = CardReaderMode.Disabled } };
         using var runtime = TestRuntime.Create(policy: policy);
@@ -139,8 +138,9 @@ public class CardReadTests
 
         var rejected = Assert.Throws<JobRejectedException>(() => runtime.CardReads.Start(Origin, new CardReadOptions(), CardReadTrigger.Api));
         Assert.Equal("card_reader_disabled", rejected.Code);
-        var scan = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Flatbed, MaxPages = 1 }, ScanTrigger.Api);
-        Assert.Equal(ScanJobStatus.Queued, scan.Status);
+        var scan = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Flatbed, MaxSheets = 1 }, ScanTrigger.Api);
+        await scan.Finished.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(ScanJobStatus.Completed, scan.Status);
     }
 
     [Fact]
@@ -170,6 +170,22 @@ public class CardReadTests
 
         Assert.False(HighbridgeUri.TryParse(url + "&apdu=00A40400", out _, out error));
         Assert.Contains("apdu", error);
+    }
+
+    /// <summary>
+    /// Reading is set only after the card-read task takes its lock. A fixed sleep loses that race
+    /// when the runner is busy, so wait until the job is actually waiting for the card to leave.
+    /// </summary>
+    private static async Task WaitUntilReading(CardReadJob job)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (job.Status == CardReadStatus.Queued && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
+
+        Assert.Equal(CardReadStatus.Reading, job.Status);
+        Assert.False(job.IsFinished);
     }
 
     private sealed class CountingCards : ICardReaderBackend

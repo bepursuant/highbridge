@@ -3,8 +3,8 @@
 //   import { HighbridgeClient } from './highbridge.js';
 //   const client = new HighbridgeClient();
 //   button.onclick = async () => {
-//     const { pages } = await client.scan({ dpi: 300, colorMode: 'gray', source: 'feeder' });
-//     for (const page of pages) show(URL.createObjectURL(page.blob));
+//     const { documents } = await client.scan({ dpi: 300, colorMode: 'gray', source: 'feeder' });
+//     for (const document of documents) show(URL.createObjectURL(document.blob));
 //   };
 //
 // Call scan(), readCard() and connect() from a click handler: browsers require a user gesture
@@ -75,7 +75,7 @@ export class HighbridgeClient {
   /** Returns the app status, or null when highbridge is not reachable. */
   async status() {
     try {
-      return await this._json('GET', '/v1/status');
+      return await this._json('GET', '/status');
     } catch (err) {
       if (err instanceof HighbridgeError && err.code === 'unreachable') return null;
       throw err;
@@ -84,7 +84,7 @@ export class HighbridgeClient {
 
   /** Asks the user (in the highbridge app) to approve this site. Resolves when approved. */
   async pair() {
-    const result = await this._json('POST', '/v1/pair');
+    const result = await this._json('POST', '/pair');
     this._rememberPaired(true);
     return result;
   }
@@ -114,17 +114,25 @@ export class HighbridgeClient {
   /** @returns {Promise<Array<{id: string, name: string, manufacturer?: string, backend: string, isDefault: boolean}>>} */
   async listScanners() {
     await this.connect();
-    return (await this._json('GET', '/v1/scanners')).scanners;
+    return (await this._json('GET', '/scanner')).scanners;
   }
 
   /**
-   * Scans and returns the pages as Blobs.
-   * @param {object} [options] scannerId, dpi, colorMode ('color'|'gray'|'blackWhite'), source ('auto'|'flatbed'|'feeder'), duplex,
-   *   oneSheet (one feeder sheet per job: front and back when duplex; an empty feeder waits),
-   *   showDriverUi, maxPages, format ('png'),
-   *   stamp ({ position: 'top'|'bottom' } adds highbridge's provenance band; each page then has `provenance`),
-   *   barcodes (true to find barcodes: each page then has `barcodeStatus` and `barcodes`, and the result a flat `barcodes`),
-   *   barcodeFormats (e.g. ['qrCode', 'code128']; default: all common formats)
+   * Scans and returns one PNG per document. A document stacks that scan's pages top to bottom.
+   * A field left out uses the default saved for that scanner.
+   * @param {object} [options]
+   * @param {string} [options.scannerId] id from listScanners(); omit for the default scanner
+   * @param {number} [options.dpi] 50–1200
+   * @param {'color'|'gray'|'blackWhite'} [options.colorMode]
+   * @param {'auto'|'flatbed'|'feeder'} [options.source]
+   * @param {boolean} [options.duplex] feeder returns both sides; front and back are two pages
+   * @param {number} [options.maxPagesPerDocument] 0 keeps every page in one PNG
+   * @param {number} [options.maxSheets] 0 does not stop the feeder; a positive value stops after that many sheets
+   * @param {0|90|180|270} [options.orientation] clockwise sheet orientation, given to the scanner. highbridge does not rotate the image
+   * @param {boolean} [options.showDriverUi]
+   * @param {'png'} [options.format]
+   * @param {boolean} [options.barcodes] find barcodes on each finished document (`barcodeStatus` and `barcodes`)
+   * @param {string[]} [options.barcodeFormats] e.g. ['qrCode', 'code128']; default is the common set
    * @param {object} [hooks]
    * @param {(job: object) => void} [hooks.onProgress] called with each status update
    * @param {AbortSignal} [hooks.signal]
@@ -149,7 +157,7 @@ export class HighbridgeClient {
     onProgress?.(job);
     job = await this._waitFor(
       async () => {
-        const next = await this._json('GET', `/v1/scans/${job.id}`);
+        const next = await this._json('GET', `/scanner/${job.id}`);
         onProgress?.(next);
         return next;
       },
@@ -162,13 +170,11 @@ export class HighbridgeClient {
       throw new HighbridgeError(job.error?.error ?? job.status, job.error?.message ?? `The scan was ${job.status}.`, job);
     }
 
-    const pages = await Promise.all(
-      job.pages.map(async (page) => ({ ...page, blob: await this._blob(page.url) })),
+    const documents = await Promise.all(
+      job.documents.map(async (document) => ({ ...document, blob: await this._blob(document.url) })),
     );
-    this._json('DELETE', `/v1/scans/${job.id}`).catch(() => {});
-    const result = { id: job.id, pages };
-    if (job.stamp) result.stamp = job.stamp;
-    if (job.barcodes) result.barcodes = job.barcodes;
+    this._json('DELETE', `/scanner/${job.id}`).catch(() => {});
+    const result = { id: job.id, scanId: job.scanId, documents };
     if (typeof job.usedFeeder === 'boolean') result.usedFeeder = job.usedFeeder;
     return result;
   }
@@ -177,11 +183,11 @@ export class HighbridgeClient {
   async listCardReaders() {
     await this.connect();
     try {
-      return (await this._json('GET', '/v1/card-readers')).readers;
+      return (await this._json('GET', '/pcsc')).readers;
     } catch (err) {
       if (err.code !== 'approval_required') throw err;
       await this.pair();
-      return (await this._json('GET', '/v1/card-readers')).readers;
+      return (await this._json('GET', '/pcsc')).readers;
     }
   }
 
@@ -219,7 +225,7 @@ export class HighbridgeClient {
     const timeout = Math.max(this.scanTimeoutMs, (Number.isFinite(waitMs) ? waitMs : 30000) + 15000);
     job = await this._waitFor(
       async () => {
-        const next = await this._json('GET', `/v1/card-reads/${job.id}`);
+        const next = await this._json('GET', `/pcsc/${job.id}`);
         onProgress?.(next);
         return next;
       },
@@ -232,7 +238,7 @@ export class HighbridgeClient {
       throw new HighbridgeError(job.error?.error ?? job.status, job.error?.message ?? `The card read was ${job.status}.`, job);
     }
 
-    this._json('DELETE', `/v1/card-reads/${job.id}`).catch(() => {});
+    this._json('DELETE', `/pcsc/${job.id}`).catch(() => {});
     return {
       id: job.id,
       reader: job.reader,
@@ -244,9 +250,9 @@ export class HighbridgeClient {
 
   /**
    * Arms a scan session: the same POST and status poll as {@link scan}, repeated until Stop,
-   * a flatbed (always one shot), or an error that needs a person. With `oneSheet`, each cycle is
-   * one feeder sheet and an empty feeder keeps the session armed. Options are read again each
-   * cycle when `options` is a function. `pollIntervalMs` is unchanged.
+   * a flatbed (always one shot), or an error that needs a person. With `maxSheets` above zero
+   * on a feeder, each cycle stops after that many sheets and an empty feeder keeps the session
+   * armed. Options are read again each cycle when `options` is a function. `pollIntervalMs` is unchanged.
    * @param {object|(() => object)} options
    * @param {object} [hooks]
    * @param {(result: object) => void} [hooks.onResult]
@@ -257,7 +263,7 @@ export class HighbridgeClient {
     for (;;) {
       if (signal?.aborted) return;
       const current = currentOptions(options);
-      const loop = current.oneSheet === true && current.source !== 'flatbed';
+      const loop = Number(current.maxSheets) > 0 && current.source !== 'flatbed';
       let jobId;
       try {
         const result = await this.scan(current, {
@@ -271,13 +277,13 @@ export class HighbridgeClient {
         if (!loop || result.usedFeeder === false) return;
       } catch (err) {
         if (signal?.aborted || err?.code === 'aborted' || err?.code === 'canceled') {
-          if (jobId) this._json('DELETE', `/v1/scans/${jobId}`).catch(() => {});
+          if (jobId) this._json('DELETE', `/scanner/${jobId}`).catch(() => {});
           return;
         }
         // The server waits on CAP_FEEDERLOADED. If a driver still reports an empty feeder,
         // that does not end the session.
         if (loop && FEEDER_RETRY.has(err?.code)) {
-          if (jobId) await this._json('DELETE', `/v1/scans/${jobId}`).catch(() => {});
+          if (jobId) await this._json('DELETE', `/scanner/${jobId}`).catch(() => {});
           await sleep(this.pollIntervalMs);
           continue;
         }
@@ -316,12 +322,12 @@ export class HighbridgeClient {
         waitForRemoval = true;
       } catch (err) {
         if (signal?.aborted || err?.code === 'aborted' || err?.code === 'canceled') {
-          if (jobId) this._json('DELETE', `/v1/card-reads/${jobId}`).catch(() => {});
+          if (jobId) this._json('DELETE', `/pcsc/${jobId}`).catch(() => {});
           return;
         }
         // Nobody presented a card in this wait. Stay armed and try again.
         if (err?.code === 'no_card') {
-          if (jobId) await this._json('DELETE', `/v1/card-reads/${jobId}`).catch(() => {});
+          if (jobId) await this._json('DELETE', `/pcsc/${jobId}`).catch(() => {});
           await sleep(this.pollIntervalMs);
           continue;
         }
@@ -332,25 +338,25 @@ export class HighbridgeClient {
 
   async _startScan(options) {
     try {
-      return await this._json('POST', '/v1/scans', options);
+      return await this._json('POST', '/scanner', options);
     } catch (err) {
-      // Stamped scans send the user's name and computer name; sites approved before highbridge
+      // Every scan sends the user's name and computer name; sites approved before highbridge
       // said so are asked once more.
       if (err.code !== 'approval_required') throw err;
       await this.pair();
-      return this._json('POST', '/v1/scans', options);
+      return this._json('POST', '/scanner', options);
     }
   }
 
   async _startCardRead(options) {
     try {
-      return await this._json('POST', '/v1/card-reads', options);
+      return await this._json('POST', '/pcsc', options);
     } catch (err) {
       // A card read sends the full card number to the site over the local connection. Sites
       // approved before highbridge said so are asked once more.
       if (err.code !== 'approval_required') throw err;
       await this.pair();
-      return this._json('POST', '/v1/card-reads', options);
+      return this._json('POST', '/pcsc', options);
     }
   }
 
@@ -359,7 +365,7 @@ export class HighbridgeClient {
       return await this._waitFor(
         async () => {
           try {
-            return await this._json('GET', `/v1/card-reads/${requestId}`);
+            return await this._json('GET', `/pcsc/${requestId}`);
           } catch (err) {
             if (err.code === 'unreachable' || err.code === 'not_found') return null;
             throw err;
@@ -385,7 +391,7 @@ export class HighbridgeClient {
       return await this._waitFor(
         async () => {
           try {
-            return await this._json('GET', `/v1/scans/${requestId}`);
+            return await this._json('GET', `/scanner/${requestId}`);
           } catch (err) {
             if (err.code === 'unreachable' || err.code === 'not_found') return null;
             throw err;
@@ -492,20 +498,18 @@ export class HighbridgeClient {
   }
 }
 
-/** Builds a highbridge://scan URL. Parameter names match the POST /v1/scans body. */
+/** Builds a highbridge://scan URL. Parameter names match the POST /scanner body. */
 export function buildScanUrl(origin, requestId, options = {}) {
   const params = new URLSearchParams({ v: '1', origin, request: requestId });
-  for (const key of ['scannerId', 'dpi', 'colorMode', 'source', 'duplex', 'showDriverUi', 'maxPages', 'format']) {
+  for (const key of ['scannerId', 'dpi', 'colorMode', 'source', 'duplex', 'showDriverUi', 'maxPagesPerDocument', 'maxSheets', 'orientation', 'format']) {
     if (options[key] !== undefined && options[key] !== null) params.set(key, String(options[key]));
   }
-  if (options.stamp) params.set('stamp', options.stamp.position ?? 'bottom');
-  if (options.oneSheet) params.set('oneSheet', 'true');
   if (options.barcodes) params.set('barcodes', 'true');
   if (Array.isArray(options.barcodeFormats)) params.set('barcodeFormats', options.barcodeFormats.join(','));
   return `highbridge://scan?${params}`;
 }
 
-/** Builds a highbridge://read-card URL. Parameter names match the POST /v1/card-reads body. */
+/** Builds a highbridge://read-card URL. Parameter names match the POST /pcsc body. */
 export function buildReadCardUrl(origin, requestId, options = {}) {
   const params = new URLSearchParams({ v: '1', origin, request: requestId });
   for (const key of ['readerId', 'interface', 'aid', 'waitForCardMs']) {
@@ -515,14 +519,10 @@ export function buildReadCardUrl(origin, requestId, options = {}) {
 }
 
 /**
- * Maps barcode points onto the image the page downloaded. Detection runs before the stamp, so a
- * band at the top shifts every point down by the band's height. A bottom band leaves the scan
- * where it was.
+ * Barcode points are pixels of the downloaded image. The provenance stamp does not move them.
  */
-export function barcodePointsOnImage(provenance, points) {
-  const shift = provenance?.position === 'top' ? Number(provenance.bandHeight) || 0 : 0;
-  if (!shift) return points;
-  return points.map((point) => ({ ...point, y: point.y + shift }));
+export function barcodePointsOnImage(_provenance, points) {
+  return points;
 }
 
 function randomId() {
@@ -547,3 +547,522 @@ function safeLocalStorage() {
     return null;
   }
 }
+
+const SCAN_FIELDS = [
+  ['scanner-id', 'scannerId'],
+  ['dpi', 'dpi', 'number'],
+  ['color-mode', 'colorMode'],
+  ['source', 'source'],
+  ['duplex', 'duplex', 'bool'],
+  ['show-driver-ui', 'showDriverUi', 'bool'],
+  ['max-pages-per-document', 'maxPagesPerDocument', 'number'],
+  ['max-sheets', 'maxSheets', 'number'],
+  ['orientation', 'orientation', 'number'],
+  ['format', 'format'],
+  ['barcodes', 'barcodes', 'bool'],
+  ['barcode-formats', 'barcodeFormats', 'list'],
+];
+
+const CARD_FIELDS = [
+  ['reader-id', 'readerId'],
+  ['interface', 'interface'],
+  ['aid', 'aid'],
+  ['wait-for-card-ms', 'waitForCardMs', 'number'],
+];
+
+/** Options for the fields this element actually set. Omitted attributes stay out of the JSON. */
+export function optionsFromAttributes(element, fields) {
+  const options = {};
+  for (const [attr, key, kind] of fields) {
+    if (!element.hasAttribute(attr)) continue;
+    const raw = element.getAttribute(attr) ?? '';
+    if (kind === 'bool') {
+      if (raw === 'false') continue;
+      options[key] = true;
+    } else if (raw === '') {
+      continue;
+    } else if (kind === 'number') {
+      const value = Number(raw);
+      if (Number.isFinite(value)) options[key] = value;
+    } else if (kind === 'list') {
+      options[key] = raw.split(',').map((part) => part.trim()).filter(Boolean);
+    } else {
+      options[key] = raw;
+    }
+  }
+  return options;
+}
+
+function bindAttribute(element, attr, read) {
+  const apply = () => {
+    const value = read();
+    if (value === undefined || value === null || value === '' || value === false) element.removeAttribute(attr);
+    else element.setAttribute(attr, value === true ? '' : String(value));
+  };
+  return apply;
+}
+
+function defineDeviceElements() {
+  if (!globalThis.customElements) return;
+
+  class HbScan extends HTMLElement {
+    connectedCallback() {
+      if (this._built) return;
+      this._built = true;
+      this.innerHTML = `
+        <p class="status-line" data-status>Checking…</p>
+        <form novalidate>
+          <div class="form-row">
+            <label class="field"><span>Scanner</span>
+              <div class="row">
+                <select data-scanner disabled><option value="">Device default</option></select>
+                <button type="button" class="secondary" data-connect>Connect</button>
+              </div>
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="field"><span>Resolution</span>
+              <select data-dpi>
+                <option value="">Device default</option>
+                <option value="150">150 dpi</option>
+                <option value="200">200 dpi</option>
+                <option value="300">300 dpi</option>
+                <option value="600">600 dpi</option>
+              </select>
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="field"><span>Paper source</span>
+              <select data-source>
+                <option value="">Device default</option>
+                <option value="auto">Automatic</option>
+                <option value="feeder">Document feeder</option>
+                <option value="flatbed">Flatbed glass</option>
+              </select>
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="field"><span>Color</span>
+              <select data-color>
+                <option value="">Device default</option>
+                <option value="color">Color</option>
+                <option value="gray">Grayscale</option>
+                <option value="blackWhite">Black &amp; white</option>
+              </select>
+            </label>
+            <p class="hint">A field left on device default uses the value saved for this scanner. A value chosen here is sent and wins.</p>
+          </div>
+          <div class="form-row">
+            <label class="check"><input type="checkbox" data-duplex /> Scan both sides (duplex)</label>
+          </div>
+          <div class="form-row">
+            <label class="field"><span>Pages per document</span>
+              <input type="number" data-per-document min="0" max="500" step="1" placeholder="Device default (0 = no limit)" />
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="field"><span>Sheets</span>
+              <input type="number" data-sheets min="0" max="500" step="1" placeholder="Device default (0 = whole feeder)" />
+            </label>
+            <p class="hint">A positive sheet count stops the feeder after that many sheets. The front and back are two pages. Start keeps scanning the next sheets until Stop. An empty feeder waits.</p>
+          </div>
+          <div class="form-row">
+            <label class="field"><span>Orientation</span>
+              <select data-orientation>
+                <option value="">Device default</option>
+                <option value="0">0°</option>
+                <option value="90">90° clockwise</option>
+                <option value="180">180°</option>
+                <option value="270">270° clockwise</option>
+              </select>
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="check"><input type="checkbox" data-driver-ui /> Use the scanner's own settings dialog</label>
+          </div>
+          <div class="form-row">
+            <label class="check"><input type="checkbox" data-barcodes /> Find barcodes</label>
+          </div>
+          <div class="row actions">
+            <button type="submit" class="primary" data-scan>Scan</button>
+            <button type="button" class="secondary" data-start>Start</button>
+            <button type="button" class="secondary" data-stop disabled>Stop</button>
+          </div>
+          <p class="progress" data-progress aria-live="polite"></p>
+        </form>
+        <div class="notice error" data-error role="alert" hidden></div>`;
+      this._applyAttributes();
+      this._wire();
+      setTimeout(() => this._boot(), 0);
+    }
+
+    _client() {
+      if (!this._hb) {
+        const port = Number(this.getAttribute('port'));
+        const launchTimeoutMs = Number(this.getAttribute('launch-timeout-ms'));
+        this._hb = new HighbridgeClient({
+          port: port > 0 ? port : undefined,
+          installerUrl: this.getAttribute('installer-url') || undefined,
+          ...(launchTimeoutMs > 0 ? { launchTimeoutMs } : {}),
+        });
+      }
+      return this._hb;
+    }
+
+    _applyAttributes() {
+      const select = (selector, attr) => {
+        const node = this.querySelector(selector);
+        if (this.hasAttribute(attr)) node.value = this.getAttribute(attr);
+        return node;
+      };
+      select('[data-dpi]', 'dpi');
+      select('[data-source]', 'source');
+      select('[data-orientation]', 'orientation');
+      select('[data-color]', 'color-mode');
+      this.querySelector('[data-duplex]').checked = this.hasAttribute('duplex') && this.getAttribute('duplex') !== 'false';
+      this.querySelector('[data-driver-ui]').checked = this.hasAttribute('show-driver-ui') && this.getAttribute('show-driver-ui') !== 'false';
+      this.querySelector('[data-barcodes]').checked = this.hasAttribute('barcodes') && this.getAttribute('barcodes') !== 'false';
+      if (this.hasAttribute('max-pages-per-document')) this.querySelector('[data-per-document]').value = this.getAttribute('max-pages-per-document');
+      if (this.hasAttribute('max-sheets')) this.querySelector('[data-sheets]').value = this.getAttribute('max-sheets');
+    }
+
+    _readControls() {
+      const set = (attr, value) => bindAttribute(this, attr, () => value)();
+      set('dpi', this.querySelector('[data-dpi]').value);
+      set('source', this.querySelector('[data-source]').value);
+      set('orientation', this.querySelector('[data-orientation]').value);
+      set('color-mode', this.querySelector('[data-color]').value);
+      set('duplex', this.querySelector('[data-duplex]').checked);
+      set('show-driver-ui', this.querySelector('[data-driver-ui]').checked);
+      set('barcodes', this.querySelector('[data-barcodes]').checked);
+      set('max-pages-per-document', this.querySelector('[data-per-document]').value);
+      set('max-sheets', this.querySelector('[data-sheets]').value);
+      const scanner = this.querySelector('[data-scanner]').value;
+      if (scanner) this.setAttribute('scanner-id', scanner);
+      else this.removeAttribute('scanner-id');
+      return optionsFromAttributes(this, SCAN_FIELDS);
+    }
+
+    _wire() {
+      const connect = this.querySelector('[data-connect]');
+      const scan = this.querySelector('[data-scan]');
+      const start = this.querySelector('[data-start]');
+      const stop = this.querySelector('[data-stop]');
+      connect.addEventListener('click', () => this._connect(connect));
+      this.querySelector('form').addEventListener('submit', (event) => {
+        event.preventDefault();
+        this._once();
+      });
+      start.addEventListener('click', () => this._session());
+      stop.addEventListener('click', () => this._control?.abort());
+      this._buttons = { scan, start, stop };
+    }
+
+    _setBusy(busy, session = false) {
+      this._buttons.scan.disabled = busy;
+      this._buttons.start.disabled = busy;
+      this._buttons.stop.disabled = !session;
+    }
+
+    _progress(text) {
+      this.querySelector('[data-progress]').textContent = text;
+      this.dispatchEvent(new CustomEvent('hb-progress', { detail: { text }, bubbles: true }));
+    }
+
+    _fail(err) {
+      const box = this.querySelector('[data-error]');
+      box.hidden = false;
+      box.textContent = err?.message ?? String(err);
+      this.dispatchEvent(new CustomEvent('hb-error', { detail: err, bubbles: true }));
+    }
+
+    _clearError() {
+      const box = this.querySelector('[data-error]');
+      box.hidden = true;
+      box.textContent = '';
+    }
+
+    async _boot() {
+      const permission = await this._client().loopbackPermission();
+      if (permission === 'prompt') this._setStatus('unknown', 'Click Connect to link highbridge');
+      else if (permission === 'denied') this._setStatus('off', 'Blocked by browser settings');
+      else await this._refreshStatus();
+    }
+
+    _setStatus(kind, text) {
+      const node = this.querySelector('[data-status]');
+      node.textContent = text;
+      this.dispatchEvent(new CustomEvent('hb-status', { detail: { kind, text }, bubbles: true }));
+    }
+
+    async _refreshStatus() {
+      try {
+        const status = await this._client().status();
+        if (!status) this._setStatus('off', 'highbridge not running');
+        else if (!status.paired) this._setStatus('warn', 'Connected · not approved');
+        else this._setStatus('ok', `Ready · v${status.version}`);
+        return status;
+      } catch {
+        this._setStatus('off', 'Unavailable');
+        return null;
+      }
+    }
+
+    async _connect(button) {
+      this._clearError();
+      button.disabled = true;
+      try {
+        await this._client().connect();
+        const scanners = await this._client().listScanners();
+        const select = this.querySelector('[data-scanner]');
+        const current = this.getAttribute('scanner-id') ?? '';
+        select.replaceChildren(new Option('Device default', ''));
+        for (const scanner of scanners) select.add(new Option(`${scanner.name}${scanner.isDefault ? ' (default)' : ''}`, scanner.id));
+        select.value = scanners.some((scanner) => scanner.id === current) ? current : '';
+        select.disabled = false;
+        button.textContent = 'Refresh';
+      } catch (err) {
+        this._fail(err);
+      } finally {
+        button.disabled = false;
+        this._refreshStatus();
+      }
+    }
+
+    async _once() {
+      if (this._control) return;
+      this._clearError();
+      this._setBusy(true);
+      this._progress('Contacting highbridge…');
+      try {
+        const result = await this._client().scan(this._readControls(), {
+          onProgress: (job) => this._progress(job.status === 'scanning' ? `Scanning… ${job.pagesScanned ?? 0} page(s)` : 'Waiting for the scanner…'),
+        });
+        this.dispatchEvent(new CustomEvent('hb-result', { detail: result, bubbles: true }));
+        this._progress(`Done · ${result.documents.length} document(s)`);
+      } catch (err) {
+        this._progress('');
+        this._fail(err);
+      } finally {
+        this._setBusy(false);
+        this._refreshStatus();
+      }
+    }
+
+    async _session() {
+      if (this._control) return;
+      this._clearError();
+      this._control = new AbortController();
+      this._setBusy(true, true);
+      this._progress('Session armed…');
+      let passes = 0;
+      try {
+        await this._client().scanSession(() => this._readControls(), {
+          signal: this._control.signal,
+          onProgress: (job) => this._progress(`Session · ${job.pagesScanned ?? 0} page(s)`),
+          onResult: (result) => {
+            passes += 1;
+            this.dispatchEvent(new CustomEvent('hb-result', { detail: result, bubbles: true }));
+            this._progress(`Session · pass ${passes} · ${result.documents.length} document(s)`);
+          },
+        });
+        if (this._control.signal.aborted && !passes) this._progress('Stopped');
+      } catch (err) {
+        this._progress('');
+        this._fail(err);
+      } finally {
+        this._control = null;
+        this._setBusy(false);
+        this._refreshStatus();
+      }
+    }
+  }
+
+  class HbRead extends HTMLElement {
+    connectedCallback() {
+      if (this._built) return;
+      this._built = true;
+      this.innerHTML = `
+        <p class="status-line" data-status>Checking…</p>
+        <form novalidate>
+          <div class="form-row">
+            <label class="field"><span>Reader</span>
+              <div class="row">
+                <select data-reader disabled><option value="">Device default</option></select>
+                <button type="button" class="secondary" data-connect>Connect</button>
+              </div>
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="field"><span>Interface</span>
+              <select data-interface>
+                <option value="">Device default</option>
+                <option value="auto">Auto</option>
+                <option value="contact">Contact</option>
+                <option value="contactless">Contactless</option>
+              </select>
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="field"><span>Application (AID)</span>
+              <input type="text" data-aid spellcheck="false" autocomplete="off" placeholder="Device default" />
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="field"><span>Wait for a card (ms)</span>
+              <input type="number" data-wait min="0" max="120000" step="1000" placeholder="Device default" />
+            </label>
+            <p class="hint">A field left blank uses the value saved for this reader. Start keeps reading until Stop, and waits for the previous card to leave the slot.</p>
+          </div>
+          <div class="row actions">
+            <button type="submit" class="primary" data-read>Read card</button>
+            <button type="button" class="secondary" data-start>Start</button>
+            <button type="button" class="secondary" data-stop disabled>Stop</button>
+          </div>
+          <p class="progress" data-progress aria-live="polite"></p>
+        </form>
+        <div class="notice error" data-error role="alert" hidden></div>`;
+      const iface = this.querySelector('[data-interface]');
+      if (this.hasAttribute('interface')) iface.value = this.getAttribute('interface');
+      if (this.hasAttribute('aid')) this.querySelector('[data-aid]').value = this.getAttribute('aid');
+      if (this.hasAttribute('wait-for-card-ms')) this.querySelector('[data-wait]').value = this.getAttribute('wait-for-card-ms');
+      const connect = this.querySelector('[data-connect]');
+      const read = this.querySelector('[data-read]');
+      const start = this.querySelector('[data-start]');
+      const stop = this.querySelector('[data-stop]');
+      this._buttons = { read, start, stop };
+      connect.addEventListener('click', () => this._connect(connect));
+      this.querySelector('form').addEventListener('submit', (event) => {
+        event.preventDefault();
+        this._once();
+      });
+      start.addEventListener('click', () => this._session());
+      stop.addEventListener('click', () => this._control?.abort());
+      setTimeout(() => this._boot(), 0);
+    }
+
+    _client() {
+      if (!this._hb) {
+        const port = Number(this.getAttribute('port'));
+        const launchTimeoutMs = Number(this.getAttribute('launch-timeout-ms'));
+        this._hb = new HighbridgeClient({
+          port: port > 0 ? port : undefined,
+          installerUrl: this.getAttribute('installer-url') || undefined,
+          ...(launchTimeoutMs > 0 ? { launchTimeoutMs } : {}),
+        });
+      }
+      return this._hb;
+    }
+
+    _readControls() {
+      const iface = this.querySelector('[data-interface]').value;
+      if (iface) this.setAttribute('interface', iface);
+      else this.removeAttribute('interface');
+      const aid = this.querySelector('[data-aid]').value.trim();
+      if (aid) this.setAttribute('aid', aid);
+      else this.removeAttribute('aid');
+      const wait = this.querySelector('[data-wait]').value;
+      if (wait !== '') this.setAttribute('wait-for-card-ms', wait);
+      else this.removeAttribute('wait-for-card-ms');
+      const reader = this.querySelector('[data-reader]').value;
+      if (reader) this.setAttribute('reader-id', reader);
+      else this.removeAttribute('reader-id');
+      return optionsFromAttributes(this, CARD_FIELDS);
+    }
+
+    _setBusy(busy, session = false) {
+      this._buttons.read.disabled = busy;
+      this._buttons.start.disabled = busy;
+      this._buttons.stop.disabled = !session;
+    }
+
+    _progress(text) {
+      this.querySelector('[data-progress]').textContent = text;
+      this.dispatchEvent(new CustomEvent('hb-progress', { detail: { text }, bubbles: true }));
+    }
+
+    _fail(err) {
+      const box = this.querySelector('[data-error]');
+      box.hidden = false;
+      box.textContent = err?.message ?? String(err);
+      this.dispatchEvent(new CustomEvent('hb-error', { detail: err, bubbles: true }));
+    }
+
+    async _boot() {
+      const permission = await this._client().loopbackPermission();
+      if (permission === 'prompt') this.querySelector('[data-status]').textContent = 'Click Connect to link highbridge';
+      else if (permission === 'denied') this.querySelector('[data-status]').textContent = 'Blocked by browser settings';
+      else {
+        const status = await this._client().status().catch(() => null);
+        this.querySelector('[data-status]').textContent = status?.paired ? `Ready · v${status.version}` : status ? 'Connected · not approved' : 'highbridge not running';
+      }
+    }
+
+    async _connect(button) {
+      button.disabled = true;
+      try {
+        await this._client().connect();
+        const readers = await this._client().listCardReaders();
+        const select = this.querySelector('[data-reader]');
+        const current = this.getAttribute('reader-id') ?? '';
+        select.replaceChildren(new Option('Device default', ''));
+        for (const reader of readers) select.add(new Option(reader.name, reader.id));
+        select.value = readers.some((reader) => reader.id === current) ? current : '';
+        select.disabled = false;
+        button.textContent = 'Refresh';
+      } catch (err) {
+        this._fail(err);
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    async _once() {
+      if (this._control) return;
+      this._setBusy(true);
+      this._progress('Contacting highbridge…');
+      try {
+        const result = await this._client().readCard(this._readControls(), {
+          onProgress: (job) => this._progress(job.status === 'reading' ? 'Reading the card…' : 'Waiting to read the card…'),
+        });
+        this.dispatchEvent(new CustomEvent('hb-result', { detail: result, bubbles: true }));
+        this._progress('Done');
+      } catch (err) {
+        this._progress('');
+        this._fail(err);
+      } finally {
+        this._setBusy(false);
+      }
+    }
+
+    async _session() {
+      if (this._control) return;
+      this._control = new AbortController();
+      this._setBusy(true, true);
+      this._progress('Session armed…');
+      let passes = 0;
+      try {
+        await this._client().readCardSession(() => this._readControls(), {
+          signal: this._control.signal,
+          onResult: (result) => {
+            passes += 1;
+            this.dispatchEvent(new CustomEvent('hb-result', { detail: result, bubbles: true }));
+            this._progress(`Session · ${passes} card(s)`);
+          },
+        });
+        if (this._control.signal.aborted && !passes) this._progress('Stopped');
+      } catch (err) {
+        this._progress('');
+        this._fail(err);
+      } finally {
+        this._control = null;
+        this._setBusy(false);
+      }
+    }
+  }
+
+  customElements.define('hb-scan', HbScan);
+  customElements.define('hb-read', HbRead);
+}
+
+defineDeviceElements();

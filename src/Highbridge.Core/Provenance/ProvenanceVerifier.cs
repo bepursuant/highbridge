@@ -6,9 +6,8 @@ namespace Highbridge.Provenance;
 public sealed record ProvenanceCheck(bool Valid, PageProvenance? Provenance, string? ComputedSha256, string? Problem);
 
 /// <summary>
-/// Checks a stamped page: reads its embedded record, removes the band and recomputes the hash of
-/// the scanned area. A match shows the page content is what the scanner returned. It does not
-/// show who wrote the record; that needs a signature (see the provenance plan).
+/// Checks a stamped PNG: reads its embedded record and recomputes the hash of the image.
+/// A match shows the pixels are what was stamped. It does not show who wrote the record.
 /// </summary>
 public static class ProvenanceVerifier
 {
@@ -36,14 +35,7 @@ public static class ProvenanceVerifier
         }
 
         var image = PngDecoder.Decode(stampedPng);
-        int contentRows = image.Height - record.BandHeight;
-        if (record.BandHeight <= 0 || contentRows <= 0)
-        {
-            return new ProvenanceCheck(false, record, null, "The band height does not fit the image.");
-        }
-
-        int offset = record.Position == StampPosition.Top ? record.BandHeight : 0;
-        var (hash, _) = ProvenanceStamper.HashPixels(image, contentRows, offset);
+        var (hash, _) = ProvenanceStamper.HashPixels(image, image.Height, rowOffset: 0);
         bool match = string.Equals(hash, record.OriginalSha256, StringComparison.OrdinalIgnoreCase);
         return new ProvenanceCheck(match, record, hash, match ? null : "The page content does not match the recorded hash.");
     }
