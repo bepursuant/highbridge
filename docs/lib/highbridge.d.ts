@@ -9,14 +9,14 @@ export type OutputFormat = 'png';
 export type StampPosition = 'top' | 'bottom';
 
 /**
- * Asks highbridge to add its provenance band once on each finished document. The page can only
- * choose the position: every value in the band comes from highbridge. Policy may also require the stamp.
+ * Asks highbridge to attach its provenance record to each finished document. The page can only
+ * choose the position, which is stored for a later visible stamp. Policy may also require the stamp.
  */
 export interface StampOptions {
   position?: StampPosition;
 }
 
-/** Printed in the band, embedded in the PNG (iTXt "highbridge:provenance") and returned here. */
+/** Embedded in the PNG (iTXt "highbridge:provenance") and returned here. The image is unchanged. */
 export interface PageProvenance {
   version: 1;
   /** Made by highbridge for the whole scan, e.g. "HB-7K3M-9QX2". */
@@ -31,11 +31,11 @@ export interface PageProvenance {
   origin: string;
   page: number;
   pageCount: number;
-  /** SHA-256 of the stacked document before the band was added (canonical pixels, see hashMethod). */
+  /** SHA-256 of the document pixels (canonical pixels, see hashMethod). */
   originalSha256: string;
   hashMethod: 'highbridge-pixels-v1';
+  /** Stored for a later visible stamp. The PNG pixels are not changed. */
   position: StampPosition;
-  bandHeight: number;
   software: string;
 }
 
@@ -90,9 +90,8 @@ export interface Barcode {
   /** Reading direction on the page, degrees clockwise (0 upright, 180 upside down); absent when unknown. */
   orientation?: number;
   /**
-   * Pixels of the page as the scanner delivered it: the scan line's ends for 1D codes, corners or
-   * finder patterns for 2D codes. A provenance band on top is not included; use
-   * {@link barcodePointsOnImage} to draw them on the stamped image.
+   * Pixels of the document image: the scan line's ends for 1D codes, corners or
+   * finder patterns for 2D codes. The provenance stamp does not move them.
    */
   points: Array<{ x: number; y: number }>;
 }
@@ -276,12 +275,12 @@ export declare function buildScanUrl(origin: string, requestId: string, options?
 
 export declare function buildReadCardUrl(origin: string, requestId: string, options?: CardReadOptions): string;
 
-/**
- * Maps barcode points onto the image the page downloaded. Detection runs before the stamp, so a
- * band at the top shifts every point down by `provenance.bandHeight`. A bottom band does not.
- */
+/** Options for the fields this element actually set. Omitted attributes stay out of the JSON. */
 export declare function optionsFromAttributes(element: Element, fields: Array<[string, string, string?]>): Record<string, unknown>;
 
+/**
+ * Barcode points are pixels of the downloaded image. The provenance stamp does not move them.
+ */
 export declare function barcodePointsOnImage(
   provenance: PageProvenance | null | undefined,
   points: Array<{ x: number; y: number }>,

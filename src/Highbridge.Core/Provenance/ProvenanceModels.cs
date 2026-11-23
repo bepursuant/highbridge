@@ -10,8 +10,8 @@ public enum StampPosition
 }
 
 /// <summary>
-/// What a web page may say about the provenance stamp: only where it goes. Every value printed in
-/// the band comes from highbridge, so unknown members (such as text) are rejected.
+/// What a web page may say about the provenance stamp: only where a future visible stamp would go.
+/// Every value in the record comes from highbridge, so unknown members (such as text) are rejected.
 /// </summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 [System.ComponentModel.TypeConverter(typeof(System.ComponentModel.ExpandableObjectConverter))]
@@ -50,8 +50,8 @@ public sealed record ProvenanceIdentity(string Workstation, string User)
 }
 
 /// <summary>
-/// The provenance of one stamped page. The same record is printed in the band, embedded in the
-/// PNG (iTXt <c>highbridge:provenance</c>) and returned to the page.
+/// The provenance of one stamped document. Embedded in the file (for a PNG, iTXt
+/// <c>highbridge:provenance</c>) and returned to the page. The image itself is not changed.
 /// </summary>
 public sealed record PageProvenance
 {
@@ -84,18 +84,15 @@ public sealed record PageProvenance
     public required int PageCount { get; init; }
 
     /// <summary>
-    /// SHA-256 (hex) of the page as scanned, before the band was added, in the canonical pixel form
-    /// named by <see cref="HashMethod"/>. <see cref="ProvenanceVerifier"/> recomputes it from the
-    /// stamped PNG.
+    /// SHA-256 (hex) of the document pixels, in the canonical form named by <see cref="HashMethod"/>.
+    /// <see cref="ProvenanceVerifier"/> recomputes it from the stamped PNG.
     /// </summary>
     public required string OriginalSha256 { get; init; }
 
     public string HashMethod { get; init; } = PixelHashMethod;
 
+    /// <summary>Where a future visible stamp would sit. The PNG itself is not changed.</summary>
     public required StampPosition Position { get; init; }
-
-    /// <summary>Height in pixels of the added band (including its rule).</summary>
-    public required int BandHeight { get; init; }
 
     public required string Software { get; init; }
 }

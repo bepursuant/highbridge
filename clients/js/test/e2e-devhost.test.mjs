@@ -67,7 +67,7 @@ test('e2e: highbridge://scan forwarded from a second process is collected by req
   assert.equal(result.documents.length, 1);
 });
 
-test('e2e: stamped scan adds the provenance band and returns the record', { skip: !DLL && 'set HIGHBRIDGE_DEVHOST_DLL' }, async () => {
+test('e2e: stamped scan embeds the provenance record without changing the image', { skip: !DLL && 'set HIGHBRIDGE_DEVHOST_DLL' }, async () => {
   const client = new HighbridgeClient({ port: PORT, fetch: withOrigin(ORIGIN), origin: ORIGIN, storage: null, pollIntervalMs: 50 });
   await client.connect({ launch: false });
   const plain = await client.scan({ source: 'flatbed', colorMode: 'gray' });
@@ -84,7 +84,7 @@ test('e2e: stamped scan adds the provenance band and returns the record', { skip
     assert.deepEqual([p.page, p.pageCount], [1, 1]);
     assert.match(p.originalSha256, /^[0-9a-f]{64}$/);
     assert.match(p.user, /\\/);
-    assert.equal(page.height, plain.documents[0].height + p.bandHeight);
+    assert.equal(page.height, plain.documents[0].height);
     const text = new TextDecoder('latin1').decode(await page.blob.arrayBuffer());
     assert.ok(text.includes('iTXthighbridge:provenance'));
     assert.ok(text.includes(p.originalSha256));

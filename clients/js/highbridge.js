@@ -124,7 +124,7 @@ export class HighbridgeClient {
    *   maxSheets (0 = no limit; a positive value stops the feeder after that many sheets and keeps the session armed),
    *   orientation (0, 90, 180, or 270, applied to each page before stacking),
    *   showDriverUi, format ('png'),
-   *   stamp ({ position: 'top'|'bottom' } adds highbridge's provenance band once on the finished document),
+   *   stamp ({ position: 'top'|'bottom' } writes highbridge's provenance record into the document; the image is unchanged),
    *   barcodes (true to find barcodes on each finished document: `barcodeStatus` and `barcodes`, and the result a flat `barcodes`),
    *   barcodeFormats (e.g. ['qrCode', 'code128']; default: all common formats)
    * @param {object} [hooks]
@@ -516,14 +516,10 @@ export function buildReadCardUrl(origin, requestId, options = {}) {
 }
 
 /**
- * Maps barcode points onto the image the page downloaded. Detection runs before the stamp, so a
- * band at the top shifts every point down by the band's height. A bottom band leaves the scan
- * where it was.
+ * Barcode points are pixels of the downloaded image. The provenance stamp does not move them.
  */
-export function barcodePointsOnImage(provenance, points) {
-  const shift = provenance?.position === 'top' ? Number(provenance.bandHeight) || 0 : 0;
-  if (!shift) return points;
-  return points.map((point) => ({ ...point, y: point.y + shift }));
+export function barcodePointsOnImage(_provenance, points) {
+  return points;
 }
 
 function randomId() {

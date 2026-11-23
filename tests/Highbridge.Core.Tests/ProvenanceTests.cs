@@ -26,72 +26,55 @@ public class ProvenanceStamperTests
         PageCount = 3,
         OriginalSha256 = string.Empty,
         Position = StampPosition.Bottom,
-        BandHeight = 0,
         Software = "highbridge test",
     };
 
     [Theory]
     [InlineData(StampPosition.Bottom)]
     [InlineData(StampPosition.Top)]
-    public void Extends_the_canvas_and_copies_the_scanned_pixels_unchanged(StampPosition position)
+    public void Leaves_the_image_unchanged_and_writes_metadata(StampPosition position)
     {
         byte[] original = ColorPage(400, 300, dpi: 150);
 
-        var stamped = ProvenanceStamper.Stamp(original, Record with { Position = position }, fallbackDpi: 200);
+        var stamped = ProvenanceStamper.Stamp(original, Record with { Position = position });
 
         var before = PngDecoder.Decode(original);
         var after = PngDecoder.Decode(stamped.Png);
-        int band = stamped.Provenance.BandHeight;
-        Assert.True(band > 40);
-        Assert.Equal((400, 300 + band), (after.Width, after.Height));
+        Assert.Equal((400, 300), (after.Width, after.Height));
         Assert.Equal((stamped.Width, stamped.Height), (after.Width, after.Height));
         Assert.Equal(3, after.Channels);
         Assert.Equal(150, after.Dpi);
+        Assert.Equal(position, stamped.Provenance.Position);
 
-        int offset = position == StampPosition.Top ? band : 0;
         var a = new byte[400 * 3];
         var b = new byte[400 * 3];
         for (int y = 0; y < 300; y++)
         {
             before.ReadRow(y, a);
-            after.ReadRow(y + offset, b);
+            after.ReadRow(y, b);
             Assert.Equal(a, b);
         }
 
-        // The band is pure black and white, with a full-width rule next to the page.
-        int bandTop = position == StampPosition.Top ? 0 : 300;
-        int ruleRow = position == StampPosition.Top ? band - 1 : 300;
-        after.ReadRow(ruleRow, b);
-        Assert.All(b, v => Assert.Equal(0, v));
-        int black = 0;
-        for (int y = bandTop; y < bandTop + band; y++)
-        {
-            after.ReadRow(y, b);
-            Assert.All(b, v => Assert.True(v is 0 or 255));
-            black += b.Count(v => v == 0);
-        }
-
-        Assert.True(black > 400 * 3 * 2, "the band has text");
+        Assert.Contains(ProvenanceStamper.MetadataKeyword, PngEncoder.ReadText(stamped.Png).Select(t => t.Keyword));
     }
 
     [Fact]
     public void Embeds_the_record_and_hash_as_png_text_and_verifies()
     {
-        var stamped = ProvenanceStamper.Stamp(ColorPage(400, 300, dpi: 200), Record, 200);
+        var stamped = ProvenanceStamper.Stamp(ColorPage(400, 300, dpi: 200), Record);
         var text = PngEncoder.ReadText(stamped.Png).ToDictionary(t => t.Keyword);
 
         Assert.Equal("highbridge test", text["Software"].Text);
         Assert.Equal("2026-10-29T20:36:05Z", text["Creation Time"].Text);
         Assert.Equal("Canon DR-C225", text["Source"].Text);
         Assert.True(text["Source"].Utf8);
-        Assert.Contains("USER : CONTOSO\\José", text["Description"].Text);
-        Assert.Contains("TIMESTAMP     : 2026-10-29 16:36:05 UTC-04:00", text["Description"].Text);
-        Assert.Contains("HIGHBRIDGE ID : HB-7K3M-9QX2", text["Description"].Text);
-        Assert.Contains("SCANNER       : Canon DR-C225", text["Description"].Text);
-        Assert.Contains("SHA-256 HASH  : " + stamped.Provenance.OriginalSha256[..32] + "...", text["Description"].Text);
-        Assert.DoesNotContain("20:36:05", text["Description"].Text);
+        Assert.Contains("user CONTOSO\\José", text["Description"].Text);
+        Assert.Contains("scanned 2026-10-29 16:36:05 -04:00", text["Description"].Text);
+        Assert.Contains("highbridge HB-7K3M-9QX2", text["Description"].Text);
+        Assert.Contains("scanner Canon DR-C225", text["Description"].Text);
+        Assert.Contains("sha256 " + stamped.Provenance.OriginalSha256, text["Description"].Text);
+        Assert.Contains("page 1 of 3", text["Description"].Text);
         Assert.DoesNotContain("https://app.example.com", text["Description"].Text);
-        Assert.Contains("PAGE 1 OF 3", text["Description"].Text);
 
         var embedded = JsonSerializer.Deserialize<PageProvenance>(text[ProvenanceStamper.MetadataKeyword].Text, HighbridgeJson.Options);
         Assert.Equal(stamped.Provenance, embedded);
@@ -104,21 +87,21 @@ public class ProvenanceStamperTests
     }
 
     [Fact]
-    public void Hash_is_of_the_original_pixels_whatever_the_band()
+    public void Hash_is_of_the_document_pixels()
     {
         byte[] original = ColorPage(300, 200, dpi: 200);
 
-        var bottom = ProvenanceStamper.Stamp(original, Record, 200);
-        var top = ProvenanceStamper.Stamp(original, Record with { Position = StampPosition.Top, Page = 2 }, 200);
+        var bottom = ProvenanceStamper.Stamp(original, Record);
+        var top = ProvenanceStamper.Stamp(original, Record with { Position = StampPosition.Top, Page = 2 });
 
         Assert.Equal(bottom.Provenance.OriginalSha256, top.Provenance.OriginalSha256);
-        Assert.NotEqual(bottom.Provenance.OriginalSha256, ProvenanceStamper.Stamp(ColorPage(300, 200, 200, seed: 2), Record, 200).Provenance.OriginalSha256);
+        Assert.NotEqual(bottom.Provenance.OriginalSha256, ProvenanceStamper.Stamp(ColorPage(300, 200, 200, seed: 2), Record).Provenance.OriginalSha256);
     }
 
     [Fact]
     public void Verifier_detects_an_edited_page()
     {
-        var stamped = ProvenanceStamper.Stamp(ColorPage(200, 120, dpi: 100), Record, 100);
+        var stamped = ProvenanceStamper.Stamp(ColorPage(200, 120, dpi: 100), Record);
         var image = PngDecoder.Decode(stamped.Png);
         byte[] edited = PngEncoder.Encode(image.Width, image.Height, PngPixelFormat.Rgb24, (y, row) =>
         {
@@ -145,92 +128,14 @@ public class ProvenanceStamperTests
             bw[i] = (byte)(i % 7 == 0 ? 0 : 255);
         }
 
-        var stampedBw = ProvenanceStamper.Stamp(PngEncoder.Encode(64, 40, PngPixelFormat.Bilevel, bw), Record, 200);
+        var stampedBw = ProvenanceStamper.Stamp(PngEncoder.Encode(64, 40, PngPixelFormat.Bilevel, bw), Record);
         Assert.Equal(1, stampedBw.Png[24]);
         Assert.True(ProvenanceVerifier.Verify(stampedBw.Png).Valid);
 
         var gray = bw.Select((v, i) => (byte)(v == 0 ? 0 : 100 + (i % 50))).ToArray();
-        var stampedGray = ProvenanceStamper.Stamp(PngEncoder.Encode(64, 40, PngPixelFormat.Gray8, gray), Record, 200);
+        var stampedGray = ProvenanceStamper.Stamp(PngEncoder.Encode(64, 40, PngPixelFormat.Gray8, gray), Record);
         Assert.Equal((8, 0), (stampedGray.Png[24], stampedGray.Png[25]));
         Assert.True(ProvenanceVerifier.Verify(stampedGray.Png).Valid);
-    }
-
-    [Fact]
-    public void Text_size_tracks_resolution_and_narrow_pages_wrap()
-    {
-        var at100 = ProvenanceStamper.Stamp(ColorPage(850, 50, dpi: 100), Record, 100).Provenance.BandHeight;
-        var at300 = ProvenanceStamper.Stamp(ColorPage(2550, 50, dpi: 300), Record, 300).Provenance.BandHeight;
-        Assert.InRange(at300 / (double)at100, 2.0, 3.5);
-
-        var narrow = ProvenanceStamper.Stamp(ColorPage(200, 50, dpi: 100), Record, 100);
-        Assert.True(ProvenanceVerifier.Verify(narrow.Png).Valid);
-        int wideRows = ProvenanceStamper.Arrange(ProvenanceStamper.BandLines(Record), 80).Count;
-        int narrowRows = ProvenanceStamper.Arrange(ProvenanceStamper.BandLines(Record), 16).Count;
-        Assert.True(narrowRows > wideRows);
-    }
-
-    [Fact]
-    public void Band_text_is_upper_case_ascii_and_wraps_long_values()
-    {
-        Assert.Equal("CONTOSO\\JOSE ?", ProvenanceStamper.ForBand("contoso\\José 東"));
-        Assert.Equal("A?B", ProvenanceStamper.ForBand("a\tb"));
-
-        var lines = ProvenanceStamper.Wrap([["Origin " + new string('x', 70)], ["a", "b"]], 24);
-        Assert.All(lines, l => Assert.True(l.Length <= 24));
-        Assert.Equal("A   B", lines[^1]);
-        Assert.Equal("ORIGIN " + new string('X', 70), string.Concat(lines.SkipLast(1)));
-    }
-
-    [Fact]
-    public void Page_count_sits_on_the_right_and_the_band_shows_one_timestamp()
-    {
-        var lines = ProvenanceStamper.BandLines(Record);
-        int colonAt = "HIGHBRIDGE ID".Length + 1;
-        int valueAt = colonAt + 2;
-        Assert.All(lines, line => Assert.Equal(colonAt, line.Segments[0].IndexOf(':')));
-        Assert.Equal(valueAt, lines[0].Segments[0].IndexOf("HB-7K3M-9QX2", StringComparison.Ordinal));
-        Assert.Equal(valueAt, lines[1].Segments[0].IndexOf("2026-10-29", StringComparison.Ordinal));
-        Assert.Equal(valueAt, lines[2].Segments[0].IndexOf("PC-0042", StringComparison.Ordinal));
-        Assert.Equal(valueAt, lines[3].Segments[0].IndexOf("Canon DR-C225", StringComparison.Ordinal));
-        Assert.StartsWith("SHA-256", lines[4].Segments[0]);
-        Assert.Contains("USER : CONTOSO\\José", lines[2].Segments[0]);
-
-        var wide = ProvenanceStamper.Arrange(lines, 80);
-        var shared = wide.Single(line => line.Right is not null);
-        Assert.Equal("PAGE 1 OF 3", shared.Right);
-        Assert.StartsWith("HIGHBRIDGE ID :", shared.Left);
-
-        var narrow = ProvenanceStamper.Arrange(lines, 20);
-        var ownLine = narrow.Single(line => line.Right is not null);
-        Assert.Equal(string.Empty, ownLine.Left);
-        Assert.Equal("PAGE 1 OF 3", ownLine.Right);
-
-        var stamped = ProvenanceStamper.Stamp(ColorPage(900, 80, dpi: 100), Record, 100);
-        var image = PngDecoder.Decode(stamped.Png);
-        int scale = 2;
-        int margin = 100 / 4;
-        int rightEdge = image.Width - margin - scale - 1;
-        var row = new byte[image.Width * image.Channels];
-        int rowsAtEdge = 0;
-        for (int y = image.Height - stamped.Provenance.BandHeight; y < image.Height; y++)
-        {
-            image.ReadRow(y, row);
-            int rightmost = -1;
-            for (int x = 0; x < image.Width; x++)
-            {
-                if (row[x * image.Channels] < 128)
-                {
-                    rightmost = x;
-                }
-            }
-
-            if (rightmost == rightEdge)
-            {
-                rowsAtEdge++;
-            }
-        }
-
-        Assert.True(rowsAtEdge >= scale, "page count reaches the right margin");
     }
 
     internal static byte[] ColorPage(int width, int height, int dpi, int seed = 1)
@@ -271,7 +176,7 @@ public class ProvenanceJobTests
         Assert.Equal(TimeSpan.FromHours(-4), p.ScannedAt.Offset);
         Assert.Equal(TimeSpan.Zero, p.ScannedAtUtc.Offset);
         Assert.True(ProvenanceVerifier.Verify(document.Data).Valid);
-        Assert.Equal((1169 * 2) + p.BandHeight, document.Height);
+        Assert.Equal(1169 * 2, document.Height);
     }
 
     [Fact]
@@ -351,7 +256,7 @@ public class ProvenanceJobTests
         await job.Finished.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal(2, job.PagesScanned);
         Assert.Equal(1, Assert.Single(job.Documents).Provenance!.Page);
-        Assert.Equal(160 + job.Documents[0].Provenance!.BandHeight, job.Documents[0].Height);
+        Assert.Equal(160, job.Documents[0].Height);
         Assert.All(job.Documents, p => Assert.Equal("gated scanner", p.Provenance!.Scanner));
     }
 

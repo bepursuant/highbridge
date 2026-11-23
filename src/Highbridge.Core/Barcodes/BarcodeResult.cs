@@ -14,8 +14,7 @@ public readonly record struct BarcodePoint(float X, float Y);
 /// </param>
 /// <param name="Points">
 /// Corner or end points ZXing reports for the format (2 for 1D codes, 3-4 for 2D), in pixels of the
-/// page as the scanner delivered it. A provenance band added on top shifts that image down; these
-/// points are not moved.
+/// document image. The provenance stamp does not move them.
 /// </param>
 public sealed record BarcodeResult(
     int Page,

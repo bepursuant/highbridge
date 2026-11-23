@@ -124,6 +124,56 @@ public static class PngEncoder
         return output.ToArray();
     }
 
+    /// <summary>
+    /// Inserts text chunks immediately before IEND. The image chunks are copied unchanged.
+    /// </summary>
+    public static byte[] AddText(ReadOnlySpan<byte> png, IReadOnlyList<PngText> text)
+    {
+        if (png.Length < Signature.Length || !png[..Signature.Length].SequenceEqual(Signature))
+        {
+            throw new InvalidDataException("Not a PNG.");
+        }
+
+        using var output = new MemoryStream(png.Length + 256);
+        output.Write(Signature);
+        int offset = Signature.Length;
+        bool wrote = false;
+        while (offset + 12 <= png.Length)
+        {
+            int length = BinaryPrimitives.ReadInt32BigEndian(png[offset..]);
+            if (length < 0 || offset + 12L + length > png.Length)
+            {
+                throw new InvalidDataException("The PNG is truncated.");
+            }
+
+            var type = png.Slice(offset + 4, 4);
+            if (!wrote && type.SequenceEqual("IEND"u8))
+            {
+                foreach (var entry in text)
+                {
+                    WriteText(output, entry);
+                }
+
+                wrote = true;
+            }
+
+            int chunk = 12 + length;
+            output.Write(png.Slice(offset, chunk));
+            offset += chunk;
+            if (type.SequenceEqual("IEND"u8))
+            {
+                break;
+            }
+        }
+
+        if (!wrote)
+        {
+            throw new InvalidDataException("The PNG has no IEND chunk.");
+        }
+
+        return output.ToArray();
+    }
+
     /// <summary>Reads the tEXt and iTXt chunks of a PNG (keyword, text), in file order.</summary>
     public static IReadOnlyList<PngText> ReadText(ReadOnlySpan<byte> png)
     {

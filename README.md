@@ -57,27 +57,17 @@ Status: **proof of concept** for Windows 10/11 workstations (32-bit build, PNG o
 
 `scanSession` and `readCardSession` in the JS client arm that from one click. They repeat the existing POST and status poll until Stop or an error that needs a person. A card session does not read again until that card has left the slot (`waitForRemoval` on the later reads). The card number is still only on the completed job. Pairing, claim timeouts, and the one-job locks are unchanged.
 
-`barcodes: true` finds barcodes on each finished document (QR, Data Matrix, PDF417, Code 128, Code 39, EAN-13, EAN-8, UPC-A, UPC-E and ITF, unless `barcodeFormats` names a subset, for example `["qrCode", "code128"]`). It is off unless asked. Detection runs on the stacked document in the orientation the scanner delivered, so it does not turn the image again. A wide faded Code 128 is also searched in full-width strips. The job stays `scanning` until detection finishes. Each barcode is `{page, format, text, rotation, orientation, points}`: `page` is the document index, `orientation` is the code's own angle when it can be measured, and `points` are pixels of the unstamped document. Documents also carry `barcodeStatus`: `done`, `partial` (the time budget ran out), `failed` or `skipped`. The same list is repeated once per document and once for the whole job. A `highbridge://scan` link takes the same options as `barcodes=true&barcodeFormats=qrCode,code128`. A stamp, when one is requested, is drawn once on the stacked document after that copy is taken.
+`barcodes: true` finds barcodes on each finished document (QR, Data Matrix, PDF417, Code 128, Code 39, EAN-13, EAN-8, UPC-A, UPC-E and ITF, unless `barcodeFormats` names a subset, for example `["qrCode", "code128"]`). It is off unless asked. Detection runs on the stacked document in the orientation the scanner delivered, so it does not turn the image again. A wide faded Code 128 is also searched in full-width strips. The job stays `scanning` until detection finishes. Each barcode is `{page, format, text, rotation, orientation, points}`: `page` is the document index, `orientation` is the code's own angle when it can be measured, and `points` are pixels of the unstamped document. Documents also carry `barcodeStatus`: `done`, `partial` (the time budget ran out), `failed` or `skipped`. The same list is repeated once per document and once for the whole job. A `highbridge://scan` link takes the same options as `barcodes=true&barcodeFormats=qrCode,code128`. A stamp, when one is requested, is written into the stacked document after that copy is taken. The image itself is unchanged.
 
 ### Provenance stamp
 
-With `stamp: { position: 'top' | 'bottom' }` (or `stamp=top|bottom` in a `highbridge://scan` link), highbridge makes each finished document taller by a white band with black text. The band is drawn once, after the pages are stacked, and never over the scan. Names are left-aligned and padded so the colons share a column:
-
-```
-HIGHBRIDGE ID : HB-7K3M-9QX2                     PAGE 1 OF 3
-TIMESTAMP     : 2026-10-29 16:36:05 UTC-04:00
-WORKSTATION   : PC-0042  USER : CONTOSO\JOSE
-SCANNER       : CANON DR-C225
-SHA-256 HASH  : 4f1c0a9e2b7d88a14e90c3b6f25d17a8...
-```
-
-The scan id is on the left of the first line and "PAGE N OF M" is flush right (the document index and the document count). The time is local, with its UTC offset. The bitmap font is upper case, so the printed user name drops accents. The band shows the first 32 digits of the SHA-256; the full hash, the origin, and the UTC instant stay in the embedded record and in `document.provenance`. The hash is of the stacked pixels before the band was added.
+With `stamp: { position: 'top' | 'bottom' }` (or `stamp=top|bottom` in a `highbridge://scan` link), highbridge writes a provenance record into the finished document and leaves the pixels alone. `position` is stored for a later visible stamp, such as on a PDF; it does not change the PNG.
 
 highbridge fills in every value. The page can only choose the position, and any other member of `stamp` is rejected as `invalid_options`.
 
-The same record is embedded in the PNG: an `iTXt` chunk named `highbridge:provenance` (JSON), plus `Software`, `Creation Time`, `Source` and `Description`. It is also returned to the page as `document.provenance`. `originalSha256` is computed over the stacked document's pixels before the band was added (method `highbridge-pixels-v1`), so it can be rechecked from the stamped PNG alone with `ProvenanceVerifier` in `Highbridge.Core`.
+The record is embedded in the PNG as an `iTXt` chunk named `highbridge:provenance` (JSON), plus `Software`, `Creation Time`, `Source` and `Description`. The image chunks are copied unchanged. The same record is returned to the page as `document.provenance`. `originalSha256` is computed over the document pixels (method `highbridge-pixels-v1`), so it can be rechecked from the stamped PNG alone with `ProvenanceVerifier` in `Highbridge.Core`.
 
-A stamped job publishes its documents only once they are stamped; until then, `pagesScanned` shows how many scanner pages have arrived. The band uses a built-in bitmap font, so it shows only upper-case ASCII; the metadata keeps the exact values.
+A stamped job publishes its documents only once they are stamped; until then, `pagesScanned` shows how many scanner pages have arrived.
 
 Stamped scans send the user's Windows name and computer name to the site, so the pairing prompt says so. Sites approved before that wording are asked again the first time they request a stamp (`approval_required`), and the JS client handles this automatically. Sites listed in policy, and stamps required by policy, are covered by the admin.
 
@@ -295,7 +285,7 @@ Copy `clients/js/highbridge.js` (and `highbridge.d.ts` for TypeScript) into your
 - 32-bit only, so only 32-bit TWAIN drivers are visible.
 - Canceling a scan stops at the next page boundary. Scans waiting in the driver's own dialog cannot be aborted from the web page.
 - One instance per Windows session on the fixed port 47116; terminal servers are not supported.
-- Provenance stamps are not signed or trusted-timestamped yet: the hash shows that the page content matches the record, but anyone could rewrite both. The band shows upper-case ASCII only. A `highbridge://` stamped scan from a site that still needs re-approval is rejected in the app (logged), so the page times out; the HTTP path asks for re-approval instead.
+- Provenance stamps are not signed or trusted-timestamped yet: the hash shows that the page content matches the record, but anyone could rewrite both. A `highbridge://` stamped scan from a site that still needs re-approval is rejected in the app (logged), so the page times out; the HTTP path asks for re-approval instead.
 - Barcode detection (ZXing.Net) reads 2D codes at any angle and 1D codes turned by 0/90/180/270, plus a modest skew (about 10° for a 1D code, about 15° for Data Matrix). It has not been tried on a real scanner. Aztec is found, but its angle is not reported. A page of codes adds about a second after the scan, on a background thread.
 
 ## License

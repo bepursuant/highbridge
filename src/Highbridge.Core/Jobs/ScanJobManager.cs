@@ -328,7 +328,7 @@ public sealed class ScanJobManager : IDisposable
             new ScannedPage(document.Index, document.MediaType, document.Width, document.Height, document.Data) { ScannerName = document.ScannerName },
             now)).ToArray();
         var stamped = await Task.Run(
-            () => _provenance.StampAll(received, stamp, job.Origin, job.ScanId!, scanner, job.Options.Dpi, _time.LocalTimeZone),
+            () => _provenance.StampAll(received, stamp, job.Origin, job.ScanId!, scanner, _time.LocalTimeZone),
             ct).ConfigureAwait(false);
         return stamped.Select((page, index) => documents[index].Stamped(page.Data, page.Width, page.Height, page.Provenance!)).ToArray();
     }

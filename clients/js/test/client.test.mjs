@@ -278,10 +278,10 @@ test('status() returns null when unreachable', async () => {
   assert.equal(await client(new FakeApp({ running: false })).status(), null);
 });
 
-test('a top stamp shifts barcode outlines down by the band; a bottom stamp does not', () => {
+test('a stamp does not move barcode outlines', () => {
   const points = [{ x: 10, y: 20 }, { x: 30, y: 40 }];
-  assert.deepEqual(barcodePointsOnImage({ position: 'top', bandHeight: 80 }, points), [{ x: 10, y: 100 }, { x: 30, y: 120 }]);
-  assert.equal(barcodePointsOnImage({ position: 'bottom', bandHeight: 80 }, points), points);
+  assert.equal(barcodePointsOnImage({ position: 'top' }, points), points);
+  assert.equal(barcodePointsOnImage({ position: 'bottom' }, points), points);
   assert.equal(barcodePointsOnImage(undefined, points), points);
 });
 

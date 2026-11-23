@@ -94,7 +94,7 @@ public sealed record ScanOptions
 
     public OutputFormat Format { get; set; } = OutputFormat.Png;
 
-    /// <summary>Add a provenance band to each page; null means no stamp (unless policy requires one).</summary>
+    /// <summary>Attach a provenance record to each document; null means no stamp (unless policy requires one).</summary>
     public StampOptions? Stamp { get; set; }
 
     /// <summary>Find barcodes on each finished document; see <see cref="Highbridge.Barcodes.BarcodeDetector"/>.</summary>
@@ -204,7 +204,7 @@ public sealed class ScannedPage
     /// <summary>The scanner's own name for itself (TWAIN source name), when the backend knows it.</summary>
     public string? ScannerName { get; init; }
 
-    /// <summary>Set on stamped pages: the record printed in the band and embedded in the PNG.</summary>
+    /// <summary>Set on stamped documents: the record embedded in the file.</summary>
     public PageProvenance? Provenance { get; private init; }
 
     /// <summary>A copy with the stamped image. Keep every other per-page property when adding one.</summary>

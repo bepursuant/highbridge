@@ -75,14 +75,13 @@ public sealed class ProvenanceStamping
         return $"HB-{id[..4]}-{id[4..]}";
     }
 
-    /// <summary>Stamps each finished document once. The band's page numbers are the document's place in the scan.</summary>
+    /// <summary>Stamps each finished document once. Page numbers are the document's place in the scan.</summary>
     public IReadOnlyList<ScannedPage> StampAll(
         IReadOnlyList<ReceivedPage> pages,
         StampOptions stamp,
         string origin,
         string scanId,
         string scannerFallback,
-        int fallbackDpi,
         TimeZoneInfo timeZone)
     {
         var stamped = new List<ScannedPage>(pages.Count);
@@ -108,14 +107,13 @@ public sealed class ProvenanceStamping
                 PageCount = pages.Count,
                 OriginalSha256 = string.Empty,
                 Position = stamp.Position,
-                BandHeight = 0,
                 Software = Software,
             };
 
             StampedImage result;
             try
             {
-                result = ProvenanceStamper.Stamp(page.Data, record, fallbackDpi);
+                result = ProvenanceStamper.Stamp(page.Data, record);
             }
             catch (Exception ex) when (ex is InvalidDataException or NotSupportedException or EndOfStreamException)
             {
