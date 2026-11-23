@@ -612,13 +612,15 @@ function defineDeviceElements() {
       this.innerHTML = `
         <p class="status-line" data-status>Checking…</p>
         <form novalidate>
-          <label class="field"><span>Scanner</span>
-            <div class="row">
-              <select data-scanner disabled><option value="">Device default</option></select>
-              <button type="button" class="secondary" data-connect>Connect</button>
-            </div>
-          </label>
-          <div class="grid2">
+          <div class="form-row">
+            <label class="field"><span>Scanner</span>
+              <div class="row">
+                <select data-scanner disabled><option value="">Device default</option></select>
+                <button type="button" class="secondary" data-connect>Connect</button>
+              </div>
+            </label>
+          </div>
+          <div class="form-row">
             <label class="field"><span>Resolution</span>
               <select data-dpi>
                 <option value="">Device default</option>
@@ -628,6 +630,8 @@ function defineDeviceElements() {
                 <option value="600">600 dpi</option>
               </select>
             </label>
+          </div>
+          <div class="form-row">
             <label class="field"><span>Paper source</span>
               <select data-source>
                 <option value="">Device default</option>
@@ -637,32 +641,48 @@ function defineDeviceElements() {
               </select>
             </label>
           </div>
-          <fieldset class="field segmented"><legend>Color</legend>
-            <label><input type="radio" name="color" value="" checked /><span>Device default</span></label>
-            <label><input type="radio" name="color" value="color" /><span>Color</span></label>
-            <label><input type="radio" name="color" value="gray" /><span>Grayscale</span></label>
-            <label><input type="radio" name="color" value="blackWhite" /><span>Black &amp; white</span></label>
-          </fieldset>
-          <p class="hint">A field left on device default uses the value saved for this scanner. A value chosen here is sent and wins.</p>
-          <label class="check"><input type="checkbox" data-duplex /> Scan both sides (duplex)</label>
-          <label class="field"><span>Pages per document</span>
-            <input type="number" data-per-document min="0" max="500" step="1" placeholder="Device default (0 = no limit)" />
-          </label>
-          <label class="field"><span>Sheets</span>
-            <input type="number" data-sheets min="0" max="500" step="1" placeholder="Device default (0 = whole feeder)" />
-          </label>
-          <p class="hint">A positive sheet count stops the feeder after that many sheets. The front and back are two pages. Start keeps scanning the next sheets until Stop. An empty feeder waits.</p>
-          <label class="field"><span>Orientation</span>
-            <select data-orientation>
-              <option value="">Device default</option>
-              <option value="0">0°</option>
-              <option value="90">90° clockwise</option>
-              <option value="180">180°</option>
-              <option value="270">270° clockwise</option>
-            </select>
-          </label>
-          <label class="check"><input type="checkbox" data-driver-ui /> Use the scanner's own settings dialog</label>
-          <label class="check"><input type="checkbox" data-barcodes /> Find barcodes</label>
+          <div class="form-row">
+            <label class="field"><span>Color</span>
+              <select data-color>
+                <option value="">Device default</option>
+                <option value="color">Color</option>
+                <option value="gray">Grayscale</option>
+                <option value="blackWhite">Black &amp; white</option>
+              </select>
+            </label>
+            <p class="hint">A field left on device default uses the value saved for this scanner. A value chosen here is sent and wins.</p>
+          </div>
+          <div class="form-row">
+            <label class="check"><input type="checkbox" data-duplex /> Scan both sides (duplex)</label>
+          </div>
+          <div class="form-row">
+            <label class="field"><span>Pages per document</span>
+              <input type="number" data-per-document min="0" max="500" step="1" placeholder="Device default (0 = no limit)" />
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="field"><span>Sheets</span>
+              <input type="number" data-sheets min="0" max="500" step="1" placeholder="Device default (0 = whole feeder)" />
+            </label>
+            <p class="hint">A positive sheet count stops the feeder after that many sheets. The front and back are two pages. Start keeps scanning the next sheets until Stop. An empty feeder waits.</p>
+          </div>
+          <div class="form-row">
+            <label class="field"><span>Orientation</span>
+              <select data-orientation>
+                <option value="">Device default</option>
+                <option value="0">0°</option>
+                <option value="90">90° clockwise</option>
+                <option value="180">180°</option>
+                <option value="270">270° clockwise</option>
+              </select>
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="check"><input type="checkbox" data-driver-ui /> Use the scanner's own settings dialog</label>
+          </div>
+          <div class="form-row">
+            <label class="check"><input type="checkbox" data-barcodes /> Find barcodes</label>
+          </div>
           <div class="row actions">
             <button type="submit" class="primary" data-scan>Scan</button>
             <button type="button" class="secondary" data-start>Start</button>
@@ -698,9 +718,7 @@ function defineDeviceElements() {
       select('[data-dpi]', 'dpi');
       select('[data-source]', 'source');
       select('[data-orientation]', 'orientation');
-      const color = this.getAttribute('color-mode') ?? '';
-      const colorInput = this.querySelector(`input[name="color"][value="${color}"]`);
-      if (colorInput) colorInput.checked = true;
+      select('[data-color]', 'color-mode');
       this.querySelector('[data-duplex]').checked = this.hasAttribute('duplex') && this.getAttribute('duplex') !== 'false';
       this.querySelector('[data-driver-ui]').checked = this.hasAttribute('show-driver-ui') && this.getAttribute('show-driver-ui') !== 'false';
       this.querySelector('[data-barcodes]').checked = this.hasAttribute('barcodes') && this.getAttribute('barcodes') !== 'false';
@@ -713,7 +731,7 @@ function defineDeviceElements() {
       set('dpi', this.querySelector('[data-dpi]').value);
       set('source', this.querySelector('[data-source]').value);
       set('orientation', this.querySelector('[data-orientation]').value);
-      set('color-mode', this.querySelector('input[name="color"]:checked')?.value);
+      set('color-mode', this.querySelector('[data-color]').value);
       set('duplex', this.querySelector('[data-duplex]').checked);
       set('show-driver-ui', this.querySelector('[data-driver-ui]').checked);
       set('barcodes', this.querySelector('[data-barcodes]').checked);
@@ -867,25 +885,35 @@ function defineDeviceElements() {
       this.innerHTML = `
         <p class="status-line" data-status>Checking…</p>
         <form novalidate>
-          <label class="field"><span>Reader</span>
-            <div class="row">
-              <select data-reader disabled><option value="">Device default</option></select>
-              <button type="button" class="secondary" data-connect>Connect</button>
-            </div>
-          </label>
-          <fieldset class="field segmented"><legend>Interface</legend>
-            <label><input type="radio" name="interface" value="" checked /><span>Device default</span></label>
-            <label><input type="radio" name="interface" value="auto" /><span>Auto</span></label>
-            <label><input type="radio" name="interface" value="contact" /><span>Contact</span></label>
-            <label><input type="radio" name="interface" value="contactless" /><span>Contactless</span></label>
-          </fieldset>
-          <label class="field"><span>Application (AID)</span>
-            <input type="text" data-aid spellcheck="false" autocomplete="off" placeholder="Device default" />
-          </label>
-          <label class="field"><span>Wait for a card (ms)</span>
-            <input type="number" data-wait min="0" max="120000" step="1000" placeholder="Device default" />
-          </label>
-          <p class="hint">A field left blank uses the value saved for this reader. Start keeps reading until Stop, and waits for the previous card to leave the slot.</p>
+          <div class="form-row">
+            <label class="field"><span>Reader</span>
+              <div class="row">
+                <select data-reader disabled><option value="">Device default</option></select>
+                <button type="button" class="secondary" data-connect>Connect</button>
+              </div>
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="field"><span>Interface</span>
+              <select data-interface>
+                <option value="">Device default</option>
+                <option value="auto">Auto</option>
+                <option value="contact">Contact</option>
+                <option value="contactless">Contactless</option>
+              </select>
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="field"><span>Application (AID)</span>
+              <input type="text" data-aid spellcheck="false" autocomplete="off" placeholder="Device default" />
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="field"><span>Wait for a card (ms)</span>
+              <input type="number" data-wait min="0" max="120000" step="1000" placeholder="Device default" />
+            </label>
+            <p class="hint">A field left blank uses the value saved for this reader. Start keeps reading until Stop, and waits for the previous card to leave the slot.</p>
+          </div>
           <div class="row actions">
             <button type="submit" class="primary" data-read>Read card</button>
             <button type="button" class="secondary" data-start>Start</button>
@@ -894,9 +922,8 @@ function defineDeviceElements() {
           <p class="progress" data-progress aria-live="polite"></p>
         </form>
         <div class="notice error" data-error role="alert" hidden></div>`;
-      const iface = this.getAttribute('interface') ?? '';
-      const ifaceInput = this.querySelector(`input[name="interface"][value="${iface}"]`);
-      if (ifaceInput) ifaceInput.checked = true;
+      const iface = this.querySelector('[data-interface]');
+      if (this.hasAttribute('interface')) iface.value = this.getAttribute('interface');
       if (this.hasAttribute('aid')) this.querySelector('[data-aid]').value = this.getAttribute('aid');
       if (this.hasAttribute('wait-for-card-ms')) this.querySelector('[data-wait]').value = this.getAttribute('wait-for-card-ms');
       const connect = this.querySelector('[data-connect]');
@@ -928,7 +955,7 @@ function defineDeviceElements() {
     }
 
     _readControls() {
-      const iface = this.querySelector('input[name="interface"]:checked')?.value;
+      const iface = this.querySelector('[data-interface]').value;
       if (iface) this.setAttribute('interface', iface);
       else this.removeAttribute('interface');
       const aid = this.querySelector('[data-aid]').value.trim();
