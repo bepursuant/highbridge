@@ -167,11 +167,11 @@ internal sealed class TwainScan
     private void OnTransferReady(object? sender, TransferReadyEventArgs e)
     {
         FinishMemoryPage();
-        // The previous page has been acknowledged. Let a driver thread blocked in SendMessage
-        // finish before this thread asks for the next image.
+        // The previous page has been acknowledged. Deliver anything the driver posted before
+        // this thread asks for the next image.
         if (_encoding.Count > 0)
         {
-            TwainTransferDeferral.FlushSentMessages();
+            _deferral?.PumpPostedMessages();
         }
 
         Progress($"transferring page {_encoding.Count + 1}");
@@ -370,11 +370,11 @@ internal sealed class TwainScan
         }
 
         Progress("encoding the scanned pages");
-        // Wait without parking this thread inside a driver call. A sent message can still be
-        // delivered, which is what a driver blocked on this thread is waiting for.
+        // Keep offering the source its messages while the pages encode. The scan has finished
+        // feeding, and a driver still expects those messages until it is closed.
         while (_encoding.Any(task => !task.IsCompleted))
         {
-            TwainTransferDeferral.FlushSentMessages();
+            _deferral?.PumpPostedMessages();
             Task.WaitAny(_encoding.ToArray(), TimeSpan.FromMilliseconds(50));
         }
 

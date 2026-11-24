@@ -17,7 +17,8 @@ namespace Highbridge.Twain;
 [SupportedOSPlatform("windows")]
 internal sealed class TwainTransferDeferral : IMessageFilter, IDisposable
 {
-    private const uint PmQsSendMessage = 0x00400000;
+    private const uint PmRemove = 0x0001;
+    private const int PumpLimit = 32;
 
     private readonly TwainSession _session;
     private readonly TwainThread _thread;
@@ -74,10 +75,27 @@ internal sealed class TwainTransferDeferral : IMessageFilter, IDisposable
     }
 
     /// <summary>
-    /// Delivers window messages another thread has sent to this one, without dispatching posted
-    /// messages. A driver stuck in SendMessage is waiting for exactly that.
+    /// Dispatches messages already queued for this thread. The source is offered each one, so a
+    /// driver waiting on its own posted event can feed the next sheet instead of timing out.
     /// </summary>
-    public static void FlushSentMessages() => PeekMessage(out _, IntPtr.Zero, 0, 0, PmQsSendMessage);
+    public void PumpPostedMessages()
+    {
+        if (_disposed != 0 || !_inTransfer)
+        {
+            return;
+        }
+
+        for (int i = 0; i < PumpLimit; i++)
+        {
+            if (!PeekMessage(out NativeMessage message, IntPtr.Zero, 0, 0, PmRemove))
+            {
+                return;
+            }
+
+            TranslateMessage(ref message);
+            DispatchMessage(ref message);
+        }
+    }
 
     public void Dispose()
     {
@@ -95,9 +113,15 @@ internal sealed class TwainTransferDeferral : IMessageFilter, IDisposable
 
     bool IMessageFilter.PreFilterMessage(ref Message message)
     {
-        // A posted transfer, or the transfer itself, must reach the window. Consuming it here
-        // would swallow the callback that runs the scan.
-        if (_disposed != 0 || _queued || _inTransfer || _session.State < 5)
+        if (_disposed != 0 || _session.State < 5)
+        {
+            return false;
+        }
+
+        // The posted "run the transfer" callback has to reach the window. Once that callback is
+        // running, every message still has to be offered to the source. Dropping them makes WIA
+        // wait out its own timeout before the next sheet.
+        if (_queued && !_inTransfer)
         {
             return false;
         }
@@ -109,6 +133,11 @@ internal sealed class TwainTransferDeferral : IMessageFilter, IDisposable
 
         if (twainMessage == TwainMessage.XferReady)
         {
+            if (_inTransfer)
+            {
+                return true;
+            }
+
             _queued = true;
             _logger.LogInformation("Transfer is ready. The scanner's notification will return before the page is taken");
             _thread.Post(RunTransfer);
@@ -136,9 +165,10 @@ internal sealed class TwainTransferDeferral : IMessageFilter, IDisposable
         }
 
         _inTransfer = true;
+        _queued = false;
         try
         {
-            FlushSentMessages();
+            PumpPostedMessages();
             if (_session.State < 6)
             {
                 _setState.Invoke(_session, [6]);
@@ -247,6 +277,13 @@ internal sealed class TwainTransferDeferral : IMessageFilter, IDisposable
     [DllImport("user32.dll", SetLastError = false)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool PeekMessage(out NativeMessage message, IntPtr hwnd, uint filterMin, uint filterMax, uint remove);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TranslateMessage(ref NativeMessage message);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr DispatchMessage(ref NativeMessage message);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct NativeMessage
