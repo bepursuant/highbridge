@@ -51,6 +51,8 @@ internal sealed class TwainTransferDeferral : IMessageFilter, IDisposable
     private bool _inTriplet;
     private bool _finishing;
     private bool _stopAfterPage;
+    private bool _gotImage;
+    private bool _loggedEarlyClose;
     private int _refused;
     private int _pumping;
     private int _disposed;
@@ -191,7 +193,9 @@ internal sealed class TwainTransferDeferral : IMessageFilter, IDisposable
 
         // An image triplet is in progress. Consuming MSG_XFERREADY here makes the source fail that
         // triplet with TWCC_BUMMER and sit until its own timeout, which is the multi-minute pause.
-        if (_disposed != 0 || _inTriplet || _session.State < 5)
+        // The same is true of the gap after MSG_XFERREADY, before the posted transfer runs: WIA
+        // answers those messages with MSG_CLOSEDSREQ, and disabling there never feeds the first sheet.
+        if (_disposed != 0 || _inTriplet || _stepQueued || _session.State < 5)
         {
             return false;
         }
@@ -203,13 +207,43 @@ internal sealed class TwainTransferDeferral : IMessageFilter, IDisposable
 
         if (twainMessage == TwainMessage.XferReady)
         {
-            if (_busy || _stepQueued || _finishing)
+            if (_busy || _finishing)
             {
                 return true;
             }
 
+            if (_session.State < 6)
+            {
+                _setState.Invoke(_session, [6]);
+            }
+
             _logger.LogInformation("Transfer is ready. The scanner's notification will return before the page is taken");
             ScheduleStep();
+            return true;
+        }
+
+        if (twainMessage is TwainMessage.CloseDSReq or TwainMessage.CloseDSOK)
+        {
+            // NTwain disables on CloseDSReq in state 5. Doing that from every message, before any
+            // page exists, is the tight DisableSource loop. A close after a real page ends the scan once.
+            if (!_gotImage)
+            {
+                if (!_loggedEarlyClose)
+                {
+                    _loggedEarlyClose = true;
+                    _logger.LogInformation("The source sent {Message} before the first page (TWAIN state {State}). The scan stays open", twainMessage, _session.State);
+                }
+
+                return true;
+            }
+
+            _stopAfterPage = true;
+            if (!_busy && !_finishing)
+            {
+                _logger.LogInformation("The source asked to close (TWAIN state {State}). Stopping the scan", _session.State);
+                EndSession(reset: _session.State > 5);
+            }
+
             return true;
         }
 
@@ -220,20 +254,6 @@ internal sealed class TwainTransferDeferral : IMessageFilter, IDisposable
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Could not handle TWAIN message {Message}", twainMessage);
-        }
-
-        if (twainMessage is TwainMessage.CloseDSReq or TwainMessage.CloseDSOK)
-        {
-            // In state 6 NTwain only records the request and waits for its own loop to close.
-            // That loop is no longer running, so close here once the current image is done.
-            if (_busy)
-            {
-                _stopAfterPage = true;
-            }
-            else
-            {
-                EndSession(reset: true);
-            }
         }
 
         return true;
@@ -251,6 +271,12 @@ internal sealed class TwainTransferDeferral : IMessageFilter, IDisposable
         _busy = true;
         try
         {
+            if (_stopAfterPage && _gotImage)
+            {
+                EndSession(reset: _session.State > 5);
+                return;
+            }
+
             bool takePage;
             try
             {
@@ -284,6 +310,7 @@ internal sealed class TwainTransferDeferral : IMessageFilter, IDisposable
                 pendingCount = EndImage(out ReturnCode endCode);
                 _logger.LogInformation("Image transfer returned {ReturnCode} in {Seconds:F1} s; MSG_ENDXFER {EndCode}; pending count {Count}",
                     transfer, elapsed.TotalSeconds, endCode, pendingCount);
+                _gotImage = true;
                 _refused = 0;
                 // A failed MSG_ENDXFER is the end of the batch. NTwain stops there too; another
                 // image call from a half-closed source is the call that comes back as TWCC_BUMMER.
