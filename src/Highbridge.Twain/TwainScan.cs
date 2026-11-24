@@ -76,9 +76,10 @@ internal sealed class TwainScan
             Progress("opening the TWAIN manager");
             _session = TwainSessions.Open(_thread, _logger);
             Hook(_session);
-            // NTwain pulls every page inside the notification that announced the first one. WIA
-            // sends that notification and waits for it to return, so the second page never starts.
-            _deferral = TwainTransferDeferral.TryInstall(_session, _thread, _logger, TransferFailed);
+            // NTwain pulls every page inside the notification that announced the first one, then
+            // asks for the next image before returning to the message loop. WIA answers that with
+            // Failure / TWCC_BUMMER and waits out its own timeout.
+            _deferral = TwainTransferDeferral.TryInstall(_session, _thread, _logger, TransferFailed, PrepareNextPage);
 
             _source = TwainSessions.PickSource(_session, _options.ScannerId, _logger);
             Progress($"opening '{_source.Name}'");
@@ -167,13 +168,6 @@ internal sealed class TwainScan
     private void OnTransferReady(object? sender, TransferReadyEventArgs e)
     {
         FinishMemoryPage();
-        // The previous page has been acknowledged. Deliver anything the driver posted before
-        // this thread asks for the next image.
-        if (_encoding.Count > 0)
-        {
-            _deferral?.PumpPostedMessages();
-        }
-
         Progress($"transferring page {_encoding.Count + 1}");
         _logger.LogInformation("Transfer ready (MSG_XFERREADY): {Pending} pending, end of job {EndOfJob}, TWAIN state {State}",
             e.PendingTransferCount, e.EndOfJobFlag, _session?.State);
@@ -187,20 +181,63 @@ internal sealed class TwainScan
 
         try
         {
-            _pendingImage = e.PendingImageInfo;
-            if (_pendingImage is { } info)
+            NoteImage(e.PendingImageInfo);
+        }
+        catch (Exception ex)
+        {
+            _pendingImage = null;
+            _logger.LogInformation(ex, "Could not read DAT_IMAGEINFO");
+        }
+    }
+
+    /// <summary>
+    /// Runs on the TWAIN thread before each image when this scan takes pages one at a time.
+    /// False means the scan was stopped and the source should be closed.
+    /// </summary>
+    private bool PrepareNextPage()
+    {
+        FinishMemoryPage();
+        if (_result.Task.IsCompleted)
+        {
+            _logger.LogInformation("The scan was already stopped; the remaining pages will not be taken");
+            return false;
+        }
+
+        Progress($"transferring page {_encoding.Count + 1}");
+        ReadNextImage();
+        return true;
+    }
+
+    private void ReadNextImage()
+    {
+        TWImageInfo? info = null;
+        try
+        {
+            // ImageInfo is internal. PendingImageInfo reads it through the public event args.
+            if (_source is { } source)
             {
-                _logger.LogInformation("Next image: {Width} x {Length} px, {Bits} bits per pixel, {PixelType}, compression {Compression}, {XRes} x {YRes} dpi, transfer {Mechanism}",
-                    info.ImageWidth, info.ImageLength, info.BitsPerPixel, info.PixelType, info.Compression, info.XResolution, info.YResolution, _negotiated.Mechanism);
-            }
-            else
-            {
-                _logger.LogInformation("DAT_IMAGEINFO failed: {Status}", _source is null ? "no source" : TwainDiagnostics.SourceStatus(_source));
+                info = new TransferReadyEventArgs(source, -1, EndXferJob.None).PendingImageInfo;
             }
         }
         catch (Exception ex)
         {
             _logger.LogInformation(ex, "Could not read DAT_IMAGEINFO");
+        }
+
+        NoteImage(info);
+    }
+
+    private void NoteImage(TWImageInfo? info)
+    {
+        _pendingImage = info;
+        if (info is { } image)
+        {
+            _logger.LogInformation("Next image: {Width} x {Length} px, {Bits} bits per pixel, {PixelType}, compression {Compression}, {XRes} x {YRes} dpi, transfer {Mechanism}",
+                image.ImageWidth, image.ImageLength, image.BitsPerPixel, image.PixelType, image.Compression, image.XResolution, image.YResolution, _negotiated.Mechanism);
+        }
+        else
+        {
+            _logger.LogInformation("DAT_IMAGEINFO failed: {Status}", _source is null ? "no source" : TwainDiagnostics.SourceStatus(_source));
         }
     }
 
