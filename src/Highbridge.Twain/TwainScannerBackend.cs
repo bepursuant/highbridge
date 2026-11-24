@@ -26,15 +26,16 @@ public sealed class TwainScannerBackend : IScannerBackend, IDisposable
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ILogger _logger;
     private readonly TwainTimeouts _timeouts;
-    private readonly object _threadLock = new();
-    private TwainThread _thread;
+    private readonly TwainThread _thread;
 
     public TwainScannerBackend(ILogger<TwainScannerBackend>? logger = null, TwainTimeouts? timeouts = null)
     {
         _logger = logger ?? NullLogger<TwainScannerBackend>.Instance;
         _timeouts = timeouts ?? TwainTimeouts.Default;
         NTwainLog.Install(_logger);
-        _thread = StartThread();
+        _thread = new TwainThread("highbridge-twain");
+        _logger.LogInformation("TWAIN thread {Thread} started, parent window 0x{Window:X}. {Environment}",
+            _thread.ManagedThreadId, _thread.WindowHandle.ToInt64(), TwainDiagnostics.DescribeEnvironment());
     }
 
     public string Name => "twain";
@@ -57,7 +58,7 @@ public sealed class TwainScannerBackend : IScannerBackend, IDisposable
     public Task<IReadOnlyList<ScannerInfo>> ListScannersAsync(CancellationToken cancellationToken) =>
         RunExclusiveAsync<IReadOnlyList<ScannerInfo>>("list scanners", QueryTimeout, () =>
         {
-            var session = OpenSession(CurrentThread, _logger);
+            var session = OpenSession(_thread, _logger);
             try
             {
                 string? defaultName = DefaultSource(session, _logger)?.Name;
@@ -74,12 +75,11 @@ public sealed class TwainScannerBackend : IScannerBackend, IDisposable
     public async Task<IReadOnlyList<ScannedPage>> ScanAsync(ScanOptions options, Action<ScannedPage>? onPage, CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        var thread = CurrentThread;
         TwainScan scan;
         try
         {
-            scan = new TwainScan(thread, options, onPage, _logger, _timeouts, cancellationToken);
-            thread.Post(scan.Start);
+            scan = new TwainScan(_thread, options, onPage, _logger, _timeouts, cancellationToken);
+            _thread.Post(scan.Start);
         }
         catch
         {
@@ -93,7 +93,7 @@ public sealed class TwainScannerBackend : IScannerBackend, IDisposable
         }
         finally
         {
-            _ = ReleaseWhenClosedAsync(scan.Closed, thread);
+            _ = ReleaseWhenClosedAsync(scan.Closed);
         }
     }
 
@@ -114,14 +114,13 @@ public sealed class TwainScannerBackend : IScannerBackend, IDisposable
     private async Task<bool> WaitForFeederCoreAsync(ScanOptions options, CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        var thread = CurrentThread;
         TwainSession? session = null;
         DataSource? source = null;
         try
         {
-            bool? loaded = await thread.InvokeAsync(() =>
+            bool? loaded = await _thread.InvokeAsync(() =>
             {
-                session = OpenSession(thread, _logger);
+                session = OpenSession(_thread, _logger);
                 source = PickSource(session, options.ScannerId, _logger);
                 ReturnCode rc = source.Open();
                 if (rc != ReturnCode.Success)
@@ -149,7 +148,7 @@ public sealed class TwainScannerBackend : IScannerBackend, IDisposable
                 await Task.Delay(TimeSpan.FromMilliseconds(400), cancellationToken).ConfigureAwait(false);
                 var polling = source;
                 var pollingSession = session;
-                loaded = await thread.InvokeAsync(() => new CapabilityNegotiator(polling!, pollingSession!, _logger).FeederIsLoaded()).ConfigureAwait(false);
+                loaded = await _thread.InvokeAsync(() => new CapabilityNegotiator(polling!, pollingSession!, _logger).FeederIsLoaded()).ConfigureAwait(false);
             }
 
             return true;
@@ -162,7 +161,7 @@ public sealed class TwainScannerBackend : IScannerBackend, IDisposable
                 var open = session;
                 close = open is null
                     ? Task.CompletedTask
-                    : thread.InvokeAsync(() =>
+                    : _thread.InvokeAsync(() =>
                     {
                         CloseSession(open, _logger);
                         return true;
@@ -173,7 +172,7 @@ public sealed class TwainScannerBackend : IScannerBackend, IDisposable
                 close = Task.CompletedTask;
             }
 
-            await ReleaseWhenClosedAsync(close, thread).ConfigureAwait(false);
+            await ReleaseWhenClosedAsync(close).ConfigureAwait(false);
         }
     }
 
@@ -196,7 +195,7 @@ public sealed class TwainScannerBackend : IScannerBackend, IDisposable
             TwainSession session;
             try
             {
-                session = OpenSession(CurrentThread, _logger);
+                session = OpenSession(_thread, _logger);
             }
             catch (ScannerException ex)
             {
@@ -244,32 +243,12 @@ public sealed class TwainScannerBackend : IScannerBackend, IDisposable
             return text;
         }, cancellationToken);
 
-    public void Dispose() => CurrentThread.Dispose();
-
-    private TwainThread CurrentThread
-    {
-        get
-        {
-            lock (_threadLock)
-            {
-                return _thread;
-            }
-        }
-    }
-
-    private TwainThread StartThread()
-    {
-        var thread = new TwainThread("highbridge-twain");
-        _logger.LogInformation("TWAIN thread {Thread} started, parent window 0x{Window:X}. {Environment}",
-            thread.ManagedThreadId, thread.WindowHandle.ToInt64(), TwainDiagnostics.DescribeEnvironment());
-        return thread;
-    }
+    public void Dispose() => _thread.Dispose();
 
     private async Task<T> RunExclusiveAsync<T>(string what, TimeSpan timeout, Func<T> work, CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        var thread = CurrentThread;
-        var task = thread.InvokeAsync(work);
+        var task = _thread.InvokeAsync(work);
         try
         {
             return await task.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
@@ -281,15 +260,12 @@ public sealed class TwainScannerBackend : IScannerBackend, IDisposable
         }
         finally
         {
-            _ = ReleaseWhenClosedAsync(task, thread);
+            _ = ReleaseWhenClosedAsync(task);
         }
     }
 
-    /// <summary>
-    /// Holds the gate until TWAIN is closed again, so the next job never meets a half-open source.
-    /// If the TWAIN thread is stuck inside a driver call, later jobs get a new thread.
-    /// </summary>
-    private async Task ReleaseWhenClosedAsync(Task closed, TwainThread thread)
+    /// <summary>Holds the gate until TWAIN is closed again, so the next job never meets a half-open source.</summary>
+    private async Task ReleaseWhenClosedAsync(Task closed)
     {
         try
         {
@@ -297,16 +273,9 @@ public sealed class TwainScannerBackend : IScannerBackend, IDisposable
         }
         catch (TimeoutException)
         {
-            _logger.LogError("The TWAIN thread {Thread} is stuck inside the scanner driver; starting a new one. If scanning keeps failing, restart highbridge.", thread.ManagedThreadId);
-            lock (_threadLock)
-            {
-                if (_thread == thread)
-                {
-                    _thread = StartThread();
-                }
-            }
-
-            thread.Dispose();
+            // One STA thread for the process. A call stuck inside the driver blocks that thread;
+            // a later scan waits on it. Restart highbridge to clear it.
+            _logger.LogError("The TWAIN thread {Thread} is stuck inside the scanner driver. Restart highbridge if scanning keeps failing.", _thread.ManagedThreadId);
         }
         catch (Exception)
         {
@@ -436,11 +405,11 @@ internal sealed class TwainThread : IDisposable
 
     public TwainThread(string name)
     {
-        var ready = new TaskCompletionSource<TwainWindow>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ready = new TaskCompletionSource<(Form Form, IntPtr Handle)>(TaskCreationOptions.RunContinuationsAsynchronously);
         _thread = new Thread(() => Run(ready)) { IsBackground = true, Name = name };
         _thread.SetApartmentState(ApartmentState.STA);
         _thread.Start();
-        TwainWindow created = ready.Task.GetAwaiter().GetResult();
+        (Form Form, IntPtr Handle) created = ready.Task.GetAwaiter().GetResult();
         _window = created.Form;
         WindowHandle = created.Handle;
     }
@@ -494,7 +463,7 @@ internal sealed class TwainThread : IDisposable
         }
     }
 
-    private static void Run(TaskCompletionSource<TwainWindow> ready)
+    private static void Run(TaskCompletionSource<(Form Form, IntPtr Handle)> ready)
     {
         Form window;
         IntPtr handle;
@@ -510,12 +479,10 @@ internal sealed class TwainThread : IDisposable
             return;
         }
 
-        ready.SetResult(new TwainWindow(window, handle));
+        ready.SetResult((window, handle));
         Application.Run();
         window.Dispose();
     }
-
-    private readonly record struct TwainWindow(Form Form, IntPtr Handle);
 }
 
 /// <summary>Sends NTwain's own trace (thread ids, every TWAIN message it handles) to the highbridge log.</summary>

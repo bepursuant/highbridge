@@ -244,10 +244,8 @@ public sealed class ScanJobManager : IDisposable
         {
             job.SetStatus(ScanJobStatus.Scanning);
             // The empty-feeder wait is not part of the scan timeout: the job stays armed until
-            // someone loads paper or cancels. A flatbed does not wait.
-            job.UsedFeeder = job.Options.Source == PaperSource.Flatbed
-                ? false
-                : await _scannerBackend.WaitForFeederAsync(job.Options, ct).ConfigureAwait(false);
+            // someone loads paper or cancels. A flatbed returns false and does not wait.
+            job.UsedFeeder = await _scannerBackend.WaitForFeederAsync(job.Options, ct).ConfigureAwait(false);
 
             var received = new List<ReceivedPage>();
             var pages = await _scannerBackend.ScanAsync(job.Options, page => OnPage(job, page, received), ct).WaitAsync(_scanTimeout, _time, ct).ConfigureAwait(false);
@@ -329,9 +327,7 @@ public sealed class ScanJobManager : IDisposable
         var received = documents.Select(document => new ReceivedPage(
             new ScannedPage(document.Index, document.MediaType, document.Width, document.Height, document.Data) { ScannerName = document.ScannerName },
             now)).ToArray();
-        var stamped = await Task.Run(
-            () => _provenance.StampAll(received, job.Origin, job.ScanId, scanner, _time.LocalTimeZone),
-            ct).ConfigureAwait(false);
+        var stamped = _provenance.StampAll(received, job.Origin, job.ScanId, scanner, _time.LocalTimeZone);
         return stamped.Select((page, index) => documents[index].Stamped(page.Data, page.Width, page.Height, page.Provenance!)).ToArray();
     }
 
