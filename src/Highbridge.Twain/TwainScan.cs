@@ -76,9 +76,8 @@ internal sealed class TwainScan
             Progress("opening the TWAIN manager");
             _session = TwainSessions.Open(_thread, _logger);
             Hook(_session);
-            // NTwain pulls every page inside the notification that announced the first one, then
-            // asks for the next image before returning to the message loop. WIA answers that with
-            // Failure / TWCC_BUMMER and waits out its own timeout.
+            // One image per transfer-ready, after that notification returns. The next sheet waits
+            // for the next notification. A failed pull does not reset the feeder.
             _deferral = TwainTransferDeferral.TryInstall(_session, _thread, _logger, TransferFailed, PrepareNextPage);
 
             _source = TwainSessions.PickSource(_session, _options.ScannerId, _logger);
@@ -298,12 +297,40 @@ internal sealed class TwainScan
         }
 
         FinishMemoryPage();
+        Task<ScannedPage>[] pending = _encoding.ToArray();
+        _encoding.Clear();
         _logger.LogInformation("Source disabled (TWAIN state {State}, reason {Reason}): {Pages} page(s) in {Seconds:F1} s",
-            _session?.State, _session?.DisableReason, _pages.Count, _clock.Elapsed.TotalSeconds);
-        Complete();
+            _session?.State, _session?.DisableReason, pending.Length, _clock.Elapsed.TotalSeconds);
+        // PNG encoding can send a message to this thread. Waiting for it here deadlocks.
+        Task.Run(() => Deliver(pending));
+    }
 
-        // Close after NTwain has returned from this event, not inside it.
-        _thread.Post(Shutdown);
+    private void Deliver(Task<ScannedPage>[] pending)
+    {
+        try
+        {
+            if (pending.Length > 0)
+            {
+                Task.WaitAll(pending);
+            }
+        }
+        catch (AggregateException)
+        {
+            // A failed encode is recorded with the page below.
+        }
+
+        try
+        {
+            _thread.Post(() =>
+            {
+                Collect(pending);
+                Publish();
+                Shutdown();
+            });
+        }
+        catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException)
+        {
+        }
     }
 
     private void AddStrip(TWImageMemXfer strip, byte[] data)
@@ -399,23 +426,9 @@ internal sealed class TwainScan
         return copy.ToArray();
     }
 
-    private void CollectEncodedPages()
+    private void Collect(IReadOnlyList<Task<ScannedPage>> pending)
     {
-        if (_encoding.Count == 0)
-        {
-            return;
-        }
-
-        Progress("encoding the scanned pages");
-        // Keep offering the source its messages while the pages encode. The scan has finished
-        // feeding, and a driver still expects those messages until it is closed.
-        while (_encoding.Any(task => !task.IsCompleted))
-        {
-            _deferral?.PumpPostedMessages();
-            Task.WaitAny(_encoding.ToArray(), TimeSpan.FromMilliseconds(50));
-        }
-
-        foreach (var task in _encoding)
+        foreach (var task in pending)
         {
             if (task.IsCompletedSuccessfully)
             {
@@ -430,13 +443,10 @@ internal sealed class TwainScan
                 _transferError ??= task.Exception!.GetBaseException();
             }
         }
-
-        _encoding.Clear();
     }
 
-    private void Complete()
+    private void Publish()
     {
-        CollectEncodedPages();
         if (_pages.Count == 0 && _transferError is not null)
         {
             Fail(_transferError as ScannerException ?? new ScannerException("transfer_error", "The scan failed. Check the scanner and try again.", _transferError));
@@ -449,6 +459,25 @@ internal sealed class TwainScan
         }
 
         _result.TrySetResult(_pages.ToArray());
+    }
+
+    private void Complete()
+    {
+        if (_encoding.Count > 0)
+        {
+            try
+            {
+                Task.WaitAll(_encoding.ToArray());
+            }
+            catch (AggregateException)
+            {
+            }
+
+            Collect(_encoding);
+            _encoding.Clear();
+        }
+
+        Publish();
     }
 
     private bool Fail(Exception error) => error is OperationCanceledException canceled
