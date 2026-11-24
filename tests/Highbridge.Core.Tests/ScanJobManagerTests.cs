@@ -45,7 +45,8 @@ public class ScanJobManagerTests
         using var runtime = TestRuntime.Create(consent);
         runtime.Origins.Pair(Origin);
 
-        var jobs = Enumerable.Range(0, 3).Select(_ => runtime.Jobs.Start(Origin, new ScanOptions(), ScanTrigger.Api)).ToArray();
+        var flatbed = new ScanOptions { Source = PaperSource.Flatbed, ScannerId = MockScannerBackend.FlatbedId };
+        var jobs = Enumerable.Range(0, 3).Select(_ => runtime.Jobs.Start(Origin, flatbed, ScanTrigger.Api)).ToArray();
         await Task.WhenAll(jobs.Select(j => j.Finished)).WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.All(jobs, j => Assert.Equal(ScanJobStatus.Completed, j.Status));
@@ -120,25 +121,38 @@ public class ScanJobManagerTests
     }
 
     [Fact]
-    public async Task Max_sheets_limits_the_feeder_and_pages_are_stacked_into_documents()
+    public async Task Max_sheets_splits_the_stack_and_duplex_front_and_back_are_one_sheet()
     {
-        using var runtime = TestRuntime.Create();
+        var mock = new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.Zero, FeederSheets = 2 });
+        using var runtime = TestRuntime.Create(scannerBackend: mock);
         runtime.Origins.Pair(Origin);
 
-        var limited = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, MaxSheets = 1 }, ScanTrigger.Api);
-        await limited.Finished.WaitAsync(TimeSpan.FromSeconds(10));
-
-        Assert.Equal(2, limited.PagesScanned);
-        var oneSheet = Assert.Single(limited.Documents);
-        Assert.Equal(2, oneSheet.PageCount);
-
-        var split = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, MaxPagesPerDocument = 2 }, ScanTrigger.Api);
-        await split.Finished.WaitAsync(TimeSpan.FromSeconds(10));
+        var split = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, MaxSheets = 1 }, ScanTrigger.Api);
+        await split.Finished.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(4, split.PagesScanned);
         Assert.Equal(2, split.Documents.Count);
         Assert.All(split.Documents, document => Assert.Equal(2, document.PageCount));
-        Assert.True(split.Documents[1].Height > split.Documents[0].Height / 2);
+
+        var waiting = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true }, ScanTrigger.Api);
+        await WaitUntilScanning(waiting);
+        mock.LoadSheets(2);
+        await waiting.Finished.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(4, Assert.Single(waiting.Documents).PageCount);
+    }
+
+    [Fact]
+    public async Task Max_pages_per_document_splits_the_scanned_stack()
+    {
+        using var runtime = TestRuntime.Create();
+        runtime.Origins.Pair(Origin);
+
+        var split = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, MaxPagesPerDocument = 2 }, ScanTrigger.Api);
+        await split.Finished.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(4, split.PagesScanned);
+        Assert.Equal(2, split.Documents.Count);
+        Assert.All(split.Documents, document => Assert.Equal(2, document.PageCount));
     }
 
     [Theory]
@@ -210,7 +224,7 @@ public class ScanJobManagerTests
     }
 
     [Fact]
-    public async Task One_sheet_takes_the_front_and_back_and_leaves_the_rest_of_the_feeder()
+    public async Task A_loaded_stack_is_one_document_and_the_next_scan_waits_until_reloaded()
     {
         var mock = new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.Zero, FeederSheets = 2 });
         using var runtime = TestRuntime.Create(scannerBackend: mock);
@@ -221,23 +235,14 @@ public class ScanJobManagerTests
         Assert.Equal(4, Assert.Single(whole.Documents).PageCount);
         Assert.True(whole.UsedFeeder);
 
-        var first = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, MaxSheets = 1 }, ScanTrigger.Api);
-        await first.Finished.WaitAsync(TimeSpan.FromSeconds(5));
-        var second = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, MaxSheets = 1 }, ScanTrigger.Api);
-        await second.Finished.WaitAsync(TimeSpan.FromSeconds(5));
-
-        Assert.Equal(ScanJobStatus.Completed, first.Status);
-        Assert.Equal(2, Assert.Single(first.Documents).PageCount);
-        Assert.True(first.UsedFeeder);
-        Assert.Equal(2, Assert.Single(second.Documents).PageCount);
-
         var waiting = runtime.Jobs.Start(Origin, new ScanOptions { Source = PaperSource.Feeder, Duplex = true, MaxSheets = 1 }, ScanTrigger.Api);
         await WaitUntilScanning(waiting);
-
         mock.LoadSheets(1);
         await waiting.Finished.WaitAsync(TimeSpan.FromSeconds(5));
+
         Assert.Equal(ScanJobStatus.Completed, waiting.Status);
         Assert.Equal(2, Assert.Single(waiting.Documents).PageCount);
+        Assert.True(waiting.UsedFeeder);
     }
 
     [Fact]

@@ -7,6 +7,12 @@ public sealed class MockScannerOptions
     /// <summary>Sheets in the simulated document feeder.</summary>
     public int FeederSheets { get; init; } = 3;
 
+    /// <summary>
+    /// When true, a scan does not empty the feeder, so the next scan sees <see cref="FeederSheets"/>
+    /// again. The dev host uses this. Tests leave it off: the stack is consumed, and the next scan waits.
+    /// </summary>
+    public bool KeepLoaded { get; init; }
+
     public TimeSpan PageDelay { get; init; } = TimeSpan.FromMilliseconds(400);
 
     /// <summary>Mock pages are rendered at no more than this resolution to keep them small.</summary>
@@ -81,9 +87,8 @@ public sealed class MockScannerBackend : IScannerBackend
 
         bool useFeeder = UsesFeeder(options);
         bool duplex = useFeeder && options.Duplex;
-        // A limited scan consumes sheets so the next job is the next sheet. No limit still sees
-        // the configured stack, which is what repeated one-shot scans do. A flatbed is one shot.
-        int sheets = useFeeder ? SheetCount(scannerId, options.MaxSheets) : 0;
+        // The loaded stack is scanned until the feeder is empty. maxSheets only splits documents later.
+        int sheets = useFeeder ? TakeStack(scannerId) : 0;
         int pageCount = useFeeder ? sheets * (duplex ? 2 : 1) : 1;
 
         var pages = new List<ScannedPage>(pageCount);
@@ -105,13 +110,6 @@ public sealed class MockScannerBackend : IScannerBackend
         if (!UsesFeeder(options))
         {
             return false;
-        }
-
-        // The configured stack is paper. A limited scan, or a feeder that was created empty,
-        // waits until LoadSheets puts something in the counter.
-        if (options.MaxSheets <= 0 && _options.FeederSheets > 0)
-        {
-            return true;
         }
 
         string scannerId = options.ScannerId ?? FeederId;
@@ -138,24 +136,28 @@ public sealed class MockScannerBackend : IScannerBackend
         }
     }
 
-    private int SheetCount(string scannerId, int maxSheets)
+    /// <summary>Takes every sheet currently loaded. <see cref="MockScannerOptions.KeepLoaded"/> puts them back.</summary>
+    private int TakeStack(string scannerId)
     {
-        if (maxSheets <= 0)
-        {
-            return _options.FeederSheets > 0 ? _options.FeederSheets : SheetsLeft(scannerId);
-        }
-
         lock (_sheets)
         {
             if (scannerId == BarcodesId)
             {
-                int take = Math.Min(maxSheets, _barcodeLeft);
-                _barcodeLeft -= take;
+                int take = _barcodeLeft;
+                if (!_options.KeepLoaded)
+                {
+                    _barcodeLeft = 0;
+                }
+
                 return take;
             }
 
-            int sheets = Math.Min(maxSheets, _feederLeft);
-            _feederLeft -= sheets;
+            int sheets = _feederLeft;
+            if (!_options.KeepLoaded)
+            {
+                _feederLeft = 0;
+            }
+
             return sheets;
         }
     }

@@ -80,10 +80,9 @@ public sealed record ScanOptions
     public int MaxPagesPerDocument { get; set; }
 
     /// <summary>
-    /// 0 means no limit. A positive value stops the feeder after that many sheets. An image-counted
-    /// driver is asked for this many sheets times the number of sides. A sheet-counted driver
-    /// (PaperStream / fi series) is asked for this many sheets, and duplex still returns both sides.
-    /// A flatbed is one shot either way.
+    /// 0 means the whole feeder is one document. A positive value closes the current document
+    /// after that many sheets. The front and back of a duplex sheet are one sheet. This does not
+    /// stop the feeder; the stack is scanned until it is empty. A flatbed is one image.
     /// </summary>
     public int MaxSheets { get; set; }
 
@@ -148,26 +147,6 @@ public sealed record ScanOptions
 
         errors.AddRange(BarcodeFormatSet.Validate(Barcodes, BarcodeFormats));
         return errors;
-    }
-
-    /// <summary>
-    /// How many images this scan may return. Null means the feeder runs until it is empty.
-    /// A flatbed is one image. A limited feeder is <see cref="MaxSheets"/> times the number of sides.
-    /// This is not the value to put in CAP_XFERCOUNT for a sheet-counted driver; see <see cref="FeederXferCount"/>.
-    /// </summary>
-    public int? ImageLimit()
-    {
-        if (Source == PaperSource.Flatbed)
-        {
-            return 1;
-        }
-
-        if (MaxSheets <= 0)
-        {
-            return null;
-        }
-
-        return MaxSheets * (Duplex ? 2 : 1);
     }
 }
 
