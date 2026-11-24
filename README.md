@@ -66,13 +66,13 @@ Status: **alpha**. It is in testing and ready for production use on Windows 10/1
 | `duplex` | `false` | When `true`, a feeder returns both sides. The front and the back are two pages |
 | `showDriverUi` | `false` | When `true`, the vendor dialog is shown and highbridge does not force the other settings |
 | `maxPagesPerDocument` | `0` | `0` keeps every page in one PNG. `1`–`500` starts another document after that many pages |
-| `maxSheets` | `0` | `0` does not stop the feeder. `1`–`500` stops it after that many sheets. See below |
+| `maxSheets` | `0` | `0` keeps the whole feeder in one document. `1`–`500` starts another document after that many sheets. The feeder still runs until it is empty. See below |
 | `orientation` | `0` | `0`, `90`, `180`, or `270`, clockwise. Sent to the scanner as the sheet's orientation. highbridge does not rotate the image |
 | `format` | `png` | Only `png` is accepted. The field is there so a later format does not change the request shape |
 | `barcodes` | `false` | When `true`, each finished document is searched. The codes come back on that document |
 | `barcodeFormats` | the common set | Names such as `"qrCode"` and `"code128"`. Requires `barcodes: true`. On a link, `barcodeFormats=qrCode,code128` |
 
-**Feeder counting.** A flatbed is one shot. An empty feeder waits instead of failing the job. Duplex still returns both sides of each sheet. An image-counted driver (the Ambir nScan 690gt) is asked for `maxSheets` times the number of sides. A sheet-counted driver (PaperStream IP on the Ricoh fi-8170) is asked for `maxSheets` sheets, not that many images.
+**Feeder.** A flatbed is one image. An empty feeder waits instead of failing the job. A loaded stack is scanned until the feeder is empty; highbridge does not ask the driver for a different sheet or image count. `maxSheets` and `maxPagesPerDocument` only split that stack into documents. Duplex front and back are one sheet and two pages. `0` for both keeps the whole feeder in one document.
 
 ### Barcode results
 

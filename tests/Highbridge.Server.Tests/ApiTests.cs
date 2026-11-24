@@ -20,6 +20,7 @@ public sealed class ApiTests : IAsyncLifetime
     private const string OtherSite = "https://other.example.com";
 
     private HighbridgeRuntime _runtime = null!;
+    private MockScannerBackend _scanner = null!;
     private WebApplication _app = null!;
     private HttpClient _http = null!;
 
@@ -106,6 +107,7 @@ public sealed class ApiTests : IAsyncLifetime
         var scanners = await GetJson<ScannersResponse>("/scanner", Site);
         Assert.Contains(scanners.Scanners, s => s.Id == MockScannerBackend.FeederId && s.IsDefault);
 
+        _scanner.LoadSheets(2);
         var create = Request(HttpMethod.Post, "/scanner", Site);
         create.Content = JsonContent.Create(new { dpi = 150, colorMode = "gray", source = "feeder", duplex = true });
         var created = await _http.SendAsync(create);
@@ -138,6 +140,7 @@ public sealed class ApiTests : IAsyncLifetime
 
         for (int i = 0; i < 3; i++)
         {
+            _scanner.LoadSheets(2);
             var job = await Json<ScanJobResponse>(await _http.SendAsync(Request(HttpMethod.Post, "/scanner", Site)));
             Assert.Equal(Jobs.ScanJobStatus.Completed, (await PollUntilFinished(job.Id, Site)).Status);
         }
@@ -169,6 +172,7 @@ public sealed class ApiTests : IAsyncLifetime
     {
         _runtime.Origins.Pair(Site);
         _runtime.Origins.Pair(OtherSite);
+        _scanner.LoadSheets(2);
         var created = await _http.SendAsync(Request(HttpMethod.Post, "/scanner", Site));
         var job = await Json<ScanJobResponse>(created);
 
@@ -216,6 +220,7 @@ public sealed class ApiTests : IAsyncLifetime
     public async Task Barcode_request_returns_codes_on_their_document()
     {
         _runtime.Origins.Pair(Site);
+        _scanner.LoadSheets(1);
         var create = Request(HttpMethod.Post, "/scanner", Site);
         create.Content = JsonContent.Create(new { scannerId = MockScannerBackend.BarcodesId, dpi = 120, barcodes = true, maxSheets = 1 });
 
@@ -234,6 +239,7 @@ public sealed class ApiTests : IAsyncLifetime
     public async Task A_scan_without_barcodes_omits_them()
     {
         _runtime.Origins.Pair(Site);
+        _scanner.LoadSheets(2);
         var job = await PollUntilFinished((await Json<ScanJobResponse>(await _http.SendAsync(Request(HttpMethod.Post, "/scanner", Site)))).Id, Site);
 
         Assert.All(job.Documents, p => Assert.Null(p.BarcodeStatus));
@@ -278,6 +284,7 @@ public sealed class ApiTests : IAsyncLifetime
     public async Task Every_scan_returns_provenance_and_embeds_it_in_each_page()
     {
         _runtime.Origins.Pair(Site);
+        _scanner.LoadSheets(2);
         var create = Request(HttpMethod.Post, "/scanner", Site);
         create.Content = JsonContent.Create(new { source = "feeder", stamp = new { position = "top", user = "someone else" } });
         var created = await Json<ScanJobResponse>(await _http.SendAsync(create));
@@ -317,37 +324,33 @@ public sealed class ApiTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, (await _http.SendAsync(Request(HttpMethod.Post, "/pair", Site))).StatusCode);
         Assert.Equal(1, Consent.PairingRequests);
 
+        _scanner.LoadSheets(2);
         Assert.Equal(HttpStatusCode.Accepted, (await _http.SendAsync(Request(HttpMethod.Post, "/scanner", Site))).StatusCode);
     }
 
     [Fact]
-    public async Task One_sheet_returns_front_and_back_and_waits_when_the_feeder_is_empty()
+    public async Task A_loaded_feeder_is_split_into_documents_and_the_next_scan_waits()
     {
         _runtime.Origins.Pair(Site);
-        var first = await FinishedOneSheet();
-        var second = await FinishedOneSheet();
+        _scanner.LoadSheets(2);
+        var create = Request(HttpMethod.Post, "/scanner", Site);
+        create.Content = JsonContent.Create(new { source = "feeder", duplex = true, maxSheets = 1 });
+        var first = await PollUntilFinished((await Json<ScanJobResponse>(await _http.SendAsync(create))).Id, Site);
 
         Assert.Equal(Jobs.ScanJobStatus.Completed, first.Status);
-        Assert.Equal(2, Assert.Single(first.Documents).PageCount);
+        Assert.Equal(4, first.PagesScanned);
+        Assert.Equal(2, first.Documents.Count);
+        Assert.All(first.Documents, document => Assert.Equal(2, document.PageCount));
         Assert.True(first.UsedFeeder);
-        Assert.Equal(2, Assert.Single(second.Documents).PageCount);
 
-        var create = Request(HttpMethod.Post, "/scanner", Site);
-        create.Content = JsonContent.Create(new { source = "feeder", duplex = true, maxSheets = 1 });
-        var third = await Json<ScanJobResponse>(await _http.SendAsync(create));
+        var again = Request(HttpMethod.Post, "/scanner", Site);
+        again.Content = JsonContent.Create(new { source = "feeder", duplex = true, maxSheets = 1 });
+        var second = await Json<ScanJobResponse>(await _http.SendAsync(again));
         await Task.Delay(150);
-        var pending = await GetJson<ScanJobResponse>($"/scanner/{third.Id}", Site);
+        var pending = await GetJson<ScanJobResponse>($"/scanner/{second.Id}", Site);
         Assert.Null(pending.FinishedAt);
         Assert.Equal(Jobs.ScanJobStatus.Scanning, pending.Status);
-        Assert.Equal(HttpStatusCode.NoContent, (await _http.SendAsync(Request(HttpMethod.Delete, $"/scanner/{third.Id}", Site))).StatusCode);
-    }
-
-    private async Task<ScanJobResponse> FinishedOneSheet()
-    {
-        var create = Request(HttpMethod.Post, "/scanner", Site);
-        create.Content = JsonContent.Create(new { source = "feeder", duplex = true, maxSheets = 1 });
-        var created = await Json<ScanJobResponse>(await _http.SendAsync(create));
-        return await PollUntilFinished(created.Id, Site);
+        Assert.Equal(HttpStatusCode.NoContent, (await _http.SendAsync(Request(HttpMethod.Delete, $"/scanner/{second.Id}", Site))).StatusCode);
     }
 
     private async Task StartAsync()
@@ -355,8 +358,9 @@ public sealed class ApiTests : IAsyncLifetime
         // Normal priority and a longer page budget than production. The product still uses a
         // below-normal thread and a 3s budget; on a shared CI runner that budget expires before
         // every rotation is searched and the page comes back Partial.
+        _scanner = new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.FromMilliseconds(1), FeederSheets = 2 });
         _runtime = new HighbridgeRuntime(
-            new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.FromMilliseconds(1), FeederSheets = 2 }),
+            _scanner,
             new MockCardReaderBackend(),
             Consent,
             new SettingsStore(path: null),

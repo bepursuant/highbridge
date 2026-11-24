@@ -127,7 +127,7 @@ export class HighbridgeClient {
    * @param {'auto'|'flatbed'|'feeder'} [options.source]
    * @param {boolean} [options.duplex] feeder returns both sides; front and back are two pages
    * @param {number} [options.maxPagesPerDocument] 0 keeps every page in one PNG
-   * @param {number} [options.maxSheets] 0 does not stop the feeder; a positive value stops after that many sheets
+   * @param {number} [options.maxSheets] 0 keeps the whole feeder in one document; a positive value starts another after that many sheets
    * @param {0|90|180|270} [options.orientation] clockwise sheet orientation, given to the scanner. highbridge does not rotate the image
    * @param {boolean} [options.showDriverUi]
    * @param {'png'} [options.format]
@@ -251,8 +251,9 @@ export class HighbridgeClient {
   /**
    * Arms a scan session: the same POST and status poll as {@link scan}, repeated until Stop,
    * a flatbed (always one shot), or an error that needs a person. With `maxSheets` above zero
-   * on a feeder, each cycle stops after that many sheets and an empty feeder keeps the session
-   * armed. Options are read again each cycle when `options` is a function. `pollIntervalMs` is unchanged.
+   * on a feeder, each cycle scans the loaded stack and splits it into documents of that many
+   * sheets. An empty feeder keeps the session armed. Options are read again each cycle when
+   * `options` is a function. `pollIntervalMs` is unchanged.
    * @param {object|(() => object)} options
    * @param {object} [hooks]
    * @param {(result: object) => void} [hooks.onResult]
@@ -664,7 +665,7 @@ function defineDeviceElements() {
             <label class="field"><span>Sheets</span>
               <input type="number" data-sheets min="0" max="500" step="1" placeholder="Device default (0 = whole feeder)" />
             </label>
-            <p class="hint">A positive sheet count stops the feeder after that many sheets. The front and back are two pages. Start keeps scanning the next sheets until Stop. An empty feeder waits.</p>
+            <p class="hint">A positive sheet count splits the stack into documents of that many sheets. Duplex front and back are one sheet. 0 keeps the whole feeder in one document. Start scans the next stack until Stop. An empty feeder waits.</p>
           </div>
           <div class="form-row">
             <label class="field"><span>Orientation</span>

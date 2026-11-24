@@ -35,8 +35,9 @@ test('e2e: pair + scan over HTTP returns real PNG pages', { skip: !DLL && 'set H
   assert.ok(scanners.some((s) => s.id === 'mock-feeder'));
 
   const result = await client.scan({ source: 'feeder', duplex: true, maxSheets: 2, colorMode: 'gray' });
-  assert.equal(result.documents.length, 1);
+  assert.equal(result.documents.length, 2);
   assert.equal(result.documents[0].pageCount, 4);
+  assert.equal(result.documents[1].pageCount, 2);
   const bytes = new Uint8Array(await result.documents[0].blob.arrayBuffer());
   assert.deepEqual([...bytes.slice(1, 4)], [80, 78, 71]); // "PNG"
 });
@@ -75,13 +76,13 @@ test('e2e: every scan embeds provenance without changing the image', { skip: !DL
   const result = await client.scan({ source: 'feeder', maxSheets: 1, colorMode: 'gray', stamp: { user: 'CEO' } });
 
   assert.match(result.scanId, /^HB-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
-  assert.equal(result.documents.length, 1);
-  assert.equal(result.documents[0].pageCount, 1);
-  for (const page of result.documents) {
+  assert.equal(result.documents.length, 3);
+  for (const [index, page] of result.documents.entries()) {
+    assert.equal(page.pageCount, 1);
     const p = page.provenance;
     assert.equal(p.origin, ORIGIN);
     assert.equal(p.scanId, result.scanId);
-    assert.deepEqual([p.page, p.pageCount], [1, 1]);
+    assert.deepEqual([p.page, p.pageCount], [index + 1, 3]);
     assert.match(p.originalSha256, /^[0-9a-f]{64}$/);
     assert.match(p.user, /\\/);
     assert.equal(p.user.includes('CEO'), false);
@@ -99,7 +100,7 @@ test('e2e: barcode scan returns rotated codes from the mock barcode sheet', { sk
 
   const result = await client.scan({ scannerId: 'mock-barcodes', dpi: 120, maxSheets: 1, barcodes: true });
 
-  assert.equal(result.documents.length, 1);
+  assert.equal(result.documents.length, 3);
   assert.equal(result.barcodes, undefined);
   assert.equal(result.documents[0].barcodeStatus, 'done');
   const byText = Object.fromEntries(result.documents[0].barcodes.map((b) => [b.text, b]));

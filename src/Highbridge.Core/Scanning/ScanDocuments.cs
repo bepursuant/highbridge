@@ -15,17 +15,40 @@ public static class ScanDocuments
             return [];
         }
 
-        int size = options.MaxPagesPerDocument <= 0 ? pages.Count : options.MaxPagesPerDocument;
-        var documents = new List<ScannedDocument>();
-        for (int start = 0; start < pages.Count; start += size)
+        // A flatbed is one image. Zero for both limits keeps the whole feeder in one document.
+        if (options.Source == PaperSource.Flatbed || (options.MaxSheets <= 0 && options.MaxPagesPerDocument <= 0))
         {
-            int count = Math.Min(size, pages.Count - start);
-            var group = new List<ScannedPage>(count);
-            for (int i = 0; i < count; i++)
+            return [Stack(pages, 0)];
+        }
+
+        // Duplex front and back are one sheet. A document closes when either limit is reached.
+        int pagesPerSheet = options.Duplex ? 2 : 1;
+        int maxPages = options.MaxPagesPerDocument;
+        int maxSheets = options.MaxSheets;
+        var documents = new List<ScannedDocument>();
+        var group = new List<ScannedPage>();
+        int sheets = 0;
+        foreach (var page in pages)
+        {
+            group.Add(page);
+            bool closedSheet = group.Count % pagesPerSheet == 0;
+            if (closedSheet)
             {
-                group.Add(pages[start + i]);
+                sheets++;
             }
 
+            bool pageLimit = maxPages > 0 && group.Count >= maxPages;
+            bool sheetLimit = maxSheets > 0 && closedSheet && sheets >= maxSheets;
+            if (pageLimit || sheetLimit)
+            {
+                documents.Add(Stack(group, documents.Count));
+                group = [];
+                sheets = 0;
+            }
+        }
+
+        if (group.Count > 0)
+        {
             documents.Add(Stack(group, documents.Count));
         }
 

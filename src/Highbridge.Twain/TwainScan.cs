@@ -32,7 +32,8 @@ internal sealed class TwainScan
     private readonly CancellationTokenRegistration _cancellation;
     private TwainSession? _session;
     private DataSource? _source;
-    private NegotiatedScan _negotiated = new(XferMech.Native, true);
+    private XferMech _mechanism = XferMech.Native;
+    private bool _zeroIsBlack = true;
     private TWImageInfo? _pendingImage;
     private StripImageAssembler? _strips;
     private MemoryStream? _encodedStrips;
@@ -72,10 +73,10 @@ internal sealed class TwainScan
         {
             _logger.LogInformation("Scan requested: {Options}", _options);
             Progress("opening the TWAIN manager");
-            _session = TwainSessions.Open(_thread, _logger);
+            _session = TwainScannerBackend.OpenSession(_thread, _logger);
             Hook(_session);
 
-            _source = TwainSessions.PickSource(_session, _options.ScannerId, _logger);
+            _source = TwainScannerBackend.PickSource(_session, _options.ScannerId, _logger);
             Progress($"opening '{_source.Name}'");
             var rc = _source.Open();
             if (rc != ReturnCode.Success)
@@ -92,7 +93,7 @@ internal sealed class TwainScan
             }
 
             Progress("negotiating settings");
-            _negotiated = new CapabilityNegotiator(_source, _session, _logger).Apply(_options);
+            (_mechanism, _zeroIsBlack) = new CapabilityNegotiator(_source, _session, _logger).Apply(_options);
 
             var mode = _options.ShowDriverUi ? SourceEnableMode.ShowUI : SourceEnableMode.NoUI;
             _driverWindow = _options.ShowDriverUi;
@@ -169,21 +170,11 @@ internal sealed class TwainScan
             return;
         }
 
-        if (_options.ImageLimit() is int limit && _pages.Count >= limit)
+        if (_options.Source == PaperSource.Flatbed && _pages.Count >= 1)
         {
-            if (_negotiated.SheetCountedFeeder)
-            {
-                // MSG_RESET (CancelAll) aborts a sheet PaperStream has already picked and
-                // crashes the fi-8170. CAP_XFERCOUNT was set to one sheet, so this is only a
-                // stray image; it is dropped in AddPage and the feeder is left alone.
-                _logger.LogInformation("Reached {Limit} page(s). Not resetting the feeder; this driver crashes if a picked sheet is aborted", limit);
-            }
-            else
-            {
-                _logger.LogInformation("Reached {Limit} page(s); canceling the remaining transfers", limit);
-                e.CancelAll = true;
-                return;
-            }
+            _logger.LogInformation("The flatbed already delivered its image; canceling anything further");
+            e.CancelAll = true;
+            return;
         }
 
         try
@@ -192,7 +183,7 @@ internal sealed class TwainScan
             if (_pendingImage is { } info)
             {
                 _logger.LogInformation("Next image: {Width} x {Length} px, {Bits} bits per pixel, {PixelType}, compression {Compression}, {XRes} x {YRes} dpi, transfer {Mechanism}",
-                    info.ImageWidth, info.ImageLength, info.BitsPerPixel, info.PixelType, info.Compression, info.XResolution, info.YResolution, _negotiated.Mechanism);
+                    info.ImageWidth, info.ImageLength, info.BitsPerPixel, info.PixelType, info.Compression, info.XResolution, info.YResolution, _mechanism);
             }
             else
             {
@@ -285,7 +276,7 @@ internal sealed class TwainScan
             throw new ScannerException("unsupported_transfer", "The scanner sent planar image data, which highbridge cannot read.");
         }
 
-        _strips ??= new StripImageAssembler(info.ImageWidth, info.BitsPerPixel, _negotiated.ZeroIsBlack);
+        _strips ??= new StripImageAssembler(info.ImageWidth, info.BitsPerPixel, _zeroIsBlack);
         _strips.AddStrip((int)strip.XOffset, (int)strip.YOffset, (int)strip.Columns, (int)strip.Rows, (int)strip.BytesPerRow, data.AsSpan(0, (int)strip.BytesWritten));
         if (info.ImageLength > 0 && _strips.Height >= info.ImageLength)
         {
@@ -323,12 +314,6 @@ internal sealed class TwainScan
 
     private void AddPage(ScannedPage page)
     {
-        if (_negotiated.SheetCountedFeeder && _options.ImageLimit() is int limit && _pages.Count >= limit)
-        {
-            _logger.LogInformation("Ignoring page {Page}; the sheet limit is {Limit} image(s) and this feeder cannot be reset", _pages.Count + 1, limit);
-            return;
-        }
-
         _pages.Add(page);
         Progress($"received page {_pages.Count}");
         _logger.LogInformation("Page {Page}: {Width} x {Height} px, {Bytes} bytes {MediaType}", _pages.Count, page.Width, page.Height, page.Data.Length, page.MediaType);

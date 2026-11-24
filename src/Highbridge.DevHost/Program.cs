@@ -88,7 +88,7 @@ var policy = new HighbridgePolicy { AllowedOrigins = preApproved };
 var settings = new SettingsStore(settingsPath);
 var consent = new LoggingConsent(new FixedConsentService(allow), logger);
 using var runtime = new HighbridgeRuntime(
-    new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.FromMilliseconds(pageDelayMs) }),
+    new MockScannerBackend(new MockScannerOptions { PageDelay = TimeSpan.FromMilliseconds(pageDelayMs), KeepLoaded = true }),
     new MockCardReaderBackend(),
     consent,
     settings,
