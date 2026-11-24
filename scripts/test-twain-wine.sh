@@ -107,7 +107,8 @@ grep -q "the source rejected BlackWhite: Failure, TWCC Bummer" "$work/every-set-
 check_rgb every-set-rejected page-1.png
 
 probe three-pages "ok pages=3" FAKE_TWAIN_PAGES=3 -- --color=gray --dpi=75
-probe max-pages "ok pages=2" FAKE_TWAIN_PAGES=3 -- --color=gray --dpi=75 --max-pages=2
+# max-pages is a document split now. It does not stop the feeder, so all three pages come back.
+probe max-pages "ok pages=3" FAKE_TWAIN_PAGES=3 -- --color=gray --dpi=75 --max-pages=2
 
 probe never-signals "error code=scan_timeout" FAKE_TWAIN_NO_XFERREADY=1 -- --idle-timeout=3
 

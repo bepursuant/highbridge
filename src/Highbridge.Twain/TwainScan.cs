@@ -27,10 +27,12 @@ internal sealed class TwainScan
     private readonly TaskCompletionSource<IReadOnlyList<ScannedPage>> _result = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly List<ScannedPage> _pages = [];
+    private readonly List<Task<ScannedPage>> _encoding = [];
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly System.Threading.Timer _watchdog;
     private readonly CancellationTokenRegistration _cancellation;
     private TwainSession? _session;
+    private TwainTransferDeferral? _deferral;
     private DataSource? _source;
     private NegotiatedScan _negotiated = new(XferMech.Native, true);
     private TWImageInfo? _pendingImage;
@@ -74,6 +76,9 @@ internal sealed class TwainScan
             Progress("opening the TWAIN manager");
             _session = TwainSessions.Open(_thread, _logger);
             Hook(_session);
+            // One image per transfer-ready, after that notification returns. The next sheet waits
+            // for the next notification. A failed pull does not reset the feeder.
+            _deferral = TwainTransferDeferral.TryInstall(_session, _thread, _logger, TransferFailed, PrepareNextPage);
 
             _source = TwainSessions.PickSource(_session, _options.ScannerId, _logger);
             Progress($"opening '{_source.Name}'");
@@ -93,25 +98,7 @@ internal sealed class TwainScan
 
             Progress("negotiating settings");
             _negotiated = new CapabilityNegotiator(_source, _session, _logger).Apply(_options);
-
-            var mode = _options.ShowDriverUi ? SourceEnableMode.ShowUI : SourceEnableMode.NoUI;
-            _driverWindow = _options.ShowDriverUi;
-            Progress("starting the scanner");
-            rc = _source.Enable(mode, false, _thread.WindowHandle);
-            _logger.LogInformation("MSG_ENABLEDS ({Mode}, parent window 0x{Window:X}) returned {ReturnCode}; TWAIN state {State}",
-                mode, _thread.WindowHandle.ToInt64(), rc, _session.State);
-            if (rc == ReturnCode.CheckStatus)
-            {
-                _driverWindow = true;
-                _logger.LogInformation("The source cannot scan without its own window, so it will show one; the scan continues when you finish there");
-            }
-            else if (rc != ReturnCode.Success)
-            {
-                _logger.LogWarning("MSG_ENABLEDS failed: {Status}", TwainDiagnostics.SourceStatus(_source));
-                throw new ScannerException("scan_not_started", $"'{_source.Name}' did not start scanning ({rc}).");
-            }
-
-            Progress("waiting for the scanner to deliver the first page");
+            EnableSource();
         }
         catch (Exception ex)
         {
@@ -119,6 +106,28 @@ internal sealed class TwainScan
             Fail(ex);
             Shutdown();
         }
+    }
+
+    private void EnableSource()
+    {
+        var mode = _options.ShowDriverUi ? SourceEnableMode.ShowUI : SourceEnableMode.NoUI;
+        _driverWindow = _options.ShowDriverUi;
+        Progress("starting the scanner");
+        var rc = _source!.Enable(mode, false, _thread.WindowHandle);
+        _logger.LogInformation("MSG_ENABLEDS ({Mode}, parent window 0x{Window:X}) returned {ReturnCode}; TWAIN state {State}",
+            mode, _thread.WindowHandle.ToInt64(), rc, _session?.State);
+        if (rc == ReturnCode.CheckStatus)
+        {
+            _driverWindow = true;
+            _logger.LogInformation("The source cannot scan without its own window, so it will show one; the scan continues when you finish there");
+        }
+        else if (rc != ReturnCode.Success)
+        {
+            _logger.LogWarning("MSG_ENABLEDS failed: {Status}", TwainDiagnostics.SourceStatus(_source));
+            throw new ScannerException("scan_not_started", $"'{_source.Name}' did not start scanning ({rc}).");
+        }
+
+        Progress("waiting for the scanner to deliver the first page");
     }
 
     /// <summary>Ends the scan from any thread: the caller gets <paramref name="reason"/> now; TWAIN is closed on its thread.</summary>
@@ -158,7 +167,7 @@ internal sealed class TwainScan
     private void OnTransferReady(object? sender, TransferReadyEventArgs e)
     {
         FinishMemoryPage();
-        Progress($"transferring page {_pages.Count + 1}");
+        Progress($"transferring page {_encoding.Count + 1}");
         _logger.LogInformation("Transfer ready (MSG_XFERREADY): {Pending} pending, end of job {EndOfJob}, TWAIN state {State}",
             e.PendingTransferCount, e.EndOfJobFlag, _session?.State);
 
@@ -169,45 +178,74 @@ internal sealed class TwainScan
             return;
         }
 
-        if (_options.ImageLimit() is int limit && _pages.Count >= limit)
-        {
-            if (_negotiated.SheetCountedFeeder)
-            {
-                // MSG_RESET (CancelAll) aborts a sheet PaperStream has already picked and
-                // crashes the fi-8170. CAP_XFERCOUNT was set to one sheet, so this is only a
-                // stray image; it is dropped in AddPage and the feeder is left alone.
-                _logger.LogInformation("Reached {Limit} page(s). Not resetting the feeder; this driver crashes if a picked sheet is aborted", limit);
-            }
-            else
-            {
-                _logger.LogInformation("Reached {Limit} page(s); canceling the remaining transfers", limit);
-                e.CancelAll = true;
-                return;
-            }
-        }
-
         try
         {
-            _pendingImage = e.PendingImageInfo;
-            if (_pendingImage is { } info)
+            NoteImage(e.PendingImageInfo);
+        }
+        catch (Exception ex)
+        {
+            _pendingImage = null;
+            _logger.LogInformation(ex, "Could not read DAT_IMAGEINFO");
+        }
+    }
+
+    /// <summary>
+    /// Runs on the TWAIN thread before each image when this scan takes pages one at a time.
+    /// False means the scan was stopped and the source should be closed.
+    /// </summary>
+    private bool PrepareNextPage()
+    {
+        FinishMemoryPage();
+        if (_result.Task.IsCompleted)
+        {
+            _logger.LogInformation("The scan was already stopped; the remaining pages will not be taken");
+            return false;
+        }
+
+        Progress($"transferring page {_encoding.Count + 1}");
+        ReadNextImage();
+        return true;
+    }
+
+    private void ReadNextImage()
+    {
+        TWImageInfo? info = null;
+        try
+        {
+            // ImageInfo is internal. PendingImageInfo reads it through the public event args.
+            if (_source is { } source)
             {
-                _logger.LogInformation("Next image: {Width} x {Length} px, {Bits} bits per pixel, {PixelType}, compression {Compression}, {XRes} x {YRes} dpi, transfer {Mechanism}",
-                    info.ImageWidth, info.ImageLength, info.BitsPerPixel, info.PixelType, info.Compression, info.XResolution, info.YResolution, _negotiated.Mechanism);
-            }
-            else
-            {
-                _logger.LogInformation("DAT_IMAGEINFO failed: {Status}", _source is null ? "no source" : TwainDiagnostics.SourceStatus(_source));
+                info = new TransferReadyEventArgs(source, -1, EndXferJob.None).PendingImageInfo;
             }
         }
         catch (Exception ex)
         {
             _logger.LogInformation(ex, "Could not read DAT_IMAGEINFO");
         }
+
+        NoteImage(info);
+    }
+
+    private void NoteImage(TWImageInfo? info)
+    {
+        _pendingImage = info;
+        if (info is { } image)
+        {
+            _logger.LogInformation("Next image: {Width} x {Length} px, {Bits} bits per pixel, {PixelType}, compression {Compression}, {XRes} x {YRes} dpi, transfer {Mechanism}",
+                image.ImageWidth, image.ImageLength, image.BitsPerPixel, image.PixelType, image.Compression, image.XResolution, image.YResolution, _negotiated.Mechanism);
+        }
+        else
+        {
+            _logger.LogInformation("DAT_IMAGEINFO failed: {Status}", _source is null ? "no source" : TwainDiagnostics.SourceStatus(_source));
+        }
     }
 
     private void OnDataTransferred(object? sender, DataTransferredEventArgs e)
     {
-        Progress($"receiving page {_pages.Count + 1}");
+        // Copy only. Encoding stays off this thread: NTwain calls MSG_ENDXFER after this returns,
+        // and the scanner will not feed the next sheet until that call. GDI on this thread can
+        // also deadlock here, because this method runs inside the scanner's window message.
+        Progress($"receiving page {_encoding.Count + 1}");
         try
         {
             switch (e.TransferType)
@@ -218,12 +256,9 @@ internal sealed class TwainScan
                 case XferMech.File:
                 case XferMech.MemFile:
                     _logger.LogInformation("File transfer: {Path} ({Format})", e.FileDataPath, e.ImageFileFormat);
-                    using (var file = File.OpenRead(e.FileDataPath))
-                    {
-                        AddPage(Encode(file));
-                    }
-
+                    byte[] fileBytes = File.ReadAllBytes(e.FileDataPath);
                     TryDelete(e.FileDataPath);
+                    QueuePage(fileBytes);
                     break;
                 default:
                     using (var native = e.GetNativeImageStream())
@@ -233,7 +268,7 @@ internal sealed class TwainScan
                             throw new ScannerException("unsupported_transfer", "The scanner returned image data highbridge cannot read.");
                         }
 
-                        AddPage(Encode(native));
+                        QueuePage(ReadAll(native));
                     }
 
                     break;
@@ -241,7 +276,7 @@ internal sealed class TwainScan
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Could not convert the {Mechanism} transfer for page {Page}", e.TransferType, _pages.Count + 1);
+            _logger.LogError(ex, "Could not copy the {Mechanism} transfer for page {Page}", e.TransferType, _encoding.Count + 1);
             _transferError ??= ex;
         }
     }
@@ -262,12 +297,40 @@ internal sealed class TwainScan
         }
 
         FinishMemoryPage();
+        Task<ScannedPage>[] pending = _encoding.ToArray();
+        _encoding.Clear();
         _logger.LogInformation("Source disabled (TWAIN state {State}, reason {Reason}): {Pages} page(s) in {Seconds:F1} s",
-            _session?.State, _session?.DisableReason, _pages.Count, _clock.Elapsed.TotalSeconds);
-        Complete();
+            _session?.State, _session?.DisableReason, pending.Length, _clock.Elapsed.TotalSeconds);
+        // PNG encoding can send a message to this thread. Waiting for it here deadlocks.
+        Task.Run(() => Deliver(pending));
+    }
 
-        // Close after NTwain has returned from this event, not inside it.
-        _thread.Post(Shutdown);
+    private void Deliver(Task<ScannedPage>[] pending)
+    {
+        try
+        {
+            if (pending.Length > 0)
+            {
+                Task.WaitAll(pending);
+            }
+        }
+        catch (AggregateException)
+        {
+            // A failed encode is recorded with the page below.
+        }
+
+        try
+        {
+            _thread.Post(() =>
+            {
+                Collect(pending);
+                Publish();
+                Shutdown();
+            });
+        }
+        catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException)
+        {
+        }
     }
 
     private void AddStrip(TWImageMemXfer strip, byte[] data)
@@ -301,41 +364,42 @@ internal sealed class TwainScan
             if (_strips is { IsEmpty: false } strips)
             {
                 _strips = null;
-                AddPage(new ScannedPage(_pages.Count, OutputFormats.MediaType(_options.Format), strips.Width, strips.Height, strips.ToPng()) { ScannerName = _source?.Name });
+                string? scannerName = _source?.Name;
+                string mediaType = OutputFormats.MediaType(_options.Format);
+                QueuePage(index => new ScannedPage(index, mediaType, strips.Width, strips.Height, strips.ToPng()) { ScannerName = scannerName });
             }
 
             if (_encodedStrips is { Length: > 0 } encoded)
             {
                 _encodedStrips = null;
-                encoded.Position = 0;
-                using (encoded)
-                {
-                    AddPage(Encode(encoded));
-                }
+                byte[] bytes = encoded.ToArray();
+                encoded.Dispose();
+                QueuePage(bytes);
             }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Could not assemble the memory transfer for page {Page}", _pages.Count + 1);
+            _logger.LogError(ex, "Could not assemble the memory transfer for page {Page}", _encoding.Count + 1);
             _transferError ??= ex;
         }
     }
 
-    private void AddPage(ScannedPage page)
+    /// <summary>Hands the copied image to a worker. The TWAIN thread does not wait for it.</summary>
+    private void QueuePage(byte[] image)
     {
-        if (_negotiated.SheetCountedFeeder && _options.ImageLimit() is int limit && _pages.Count >= limit)
-        {
-            _logger.LogInformation("Ignoring page {Page}; the sheet limit is {Limit} image(s) and this feeder cannot be reset", _pages.Count + 1, limit);
-            return;
-        }
-
-        _pages.Add(page);
-        Progress($"received page {_pages.Count}");
-        _logger.LogInformation("Page {Page}: {Width} x {Height} px, {Bytes} bytes {MediaType}", _pages.Count, page.Width, page.Height, page.Data.Length, page.MediaType);
-        _onPage?.Invoke(page);
+        string? scannerName = _source?.Name;
+        QueuePage(index => Encode(image, index, scannerName));
     }
 
-    private ScannedPage Encode(Stream image)
+    private void QueuePage(Func<int, ScannedPage> encode)
+    {
+        int index = _encoding.Count;
+        _encoding.Add(Task.Run(() => encode(index)));
+        Progress($"received page {index + 1}");
+        _logger.LogInformation("Page {Page} is encoding off the scanner thread", index + 1);
+    }
+
+    private ScannedPage Encode(byte[] image, int index, string? scannerName)
     {
         var encoding = _options.Format switch
         {
@@ -343,13 +407,45 @@ internal sealed class TwainScan
             _ => throw new ScannerException("unsupported_format", $"highbridge cannot produce {_options.Format} pages."),
         };
 
-        using var decoded = Image.FromStream(image);
+        using var input = new MemoryStream(image);
+        using var decoded = Image.FromStream(input);
         using var output = new MemoryStream();
         decoded.Save(output, encoding);
-        return new ScannedPage(_pages.Count, OutputFormats.MediaType(_options.Format), decoded.Width, decoded.Height, output.ToArray()) { ScannerName = _source?.Name };
+        return new ScannedPage(index, OutputFormats.MediaType(_options.Format), decoded.Width, decoded.Height, output.ToArray()) { ScannerName = scannerName };
     }
 
-    private void Complete()
+    private static byte[] ReadAll(Stream stream)
+    {
+        if (stream is MemoryStream memory)
+        {
+            return memory.ToArray();
+        }
+
+        using var copy = new MemoryStream();
+        stream.CopyTo(copy);
+        return copy.ToArray();
+    }
+
+    private void Collect(IReadOnlyList<Task<ScannedPage>> pending)
+    {
+        foreach (var task in pending)
+        {
+            if (task.IsCompletedSuccessfully)
+            {
+                ScannedPage page = task.Result;
+                _pages.Add(page);
+                _logger.LogInformation("Page {Page}: {Width} x {Height} px, {Bytes} bytes {MediaType}", page.Index + 1, page.Width, page.Height, page.Data.Length, page.MediaType);
+                _onPage?.Invoke(page);
+            }
+            else if (task.IsFaulted)
+            {
+                _logger.LogError(task.Exception, "Could not encode a scanned page");
+                _transferError ??= task.Exception!.GetBaseException();
+            }
+        }
+    }
+
+    private void Publish()
     {
         if (_pages.Count == 0 && _transferError is not null)
         {
@@ -365,6 +461,25 @@ internal sealed class TwainScan
         _result.TrySetResult(_pages.ToArray());
     }
 
+    private void Complete()
+    {
+        if (_encoding.Count > 0)
+        {
+            try
+            {
+                Task.WaitAll(_encoding.ToArray());
+            }
+            catch (AggregateException)
+            {
+            }
+
+            Collect(_encoding);
+            _encoding.Clear();
+        }
+
+        Publish();
+    }
+
     private bool Fail(Exception error) => error is OperationCanceledException canceled
         ? _result.TrySetCanceled(canceled.CancellationToken)
         : _result.TrySetException(error);
@@ -378,6 +493,8 @@ internal sealed class TwainScan
         }
 
         _shutDown = true;
+        _deferral?.Dispose();
+        _deferral = null;
         _watchdog.Dispose();
         _cancellation.Dispose();
         try
@@ -439,6 +556,13 @@ internal sealed class TwainScan
             idle.TotalSeconds, state, _phase, windows.Count > 0 ? string.Join("; ", windows) : "none");
         string hint = windows.Count > 0 ? " If a scanner window is open, finish or close it." : string.Empty;
         Abort(new ScannerException("scan_timeout", $"The scanner stopped responding ({_phase}).{hint} Then try again."), $"timed out after {idle.TotalSeconds:F0} s");
+    }
+
+    private void TransferFailed(Exception error)
+    {
+        _logger.LogError(error, "The transfer failed after the scanner notification returned");
+        Fail(error);
+        Shutdown();
     }
 
     private static ScannerException ErrorFor(ReturnCode rc, ConditionCode? condition) => condition switch

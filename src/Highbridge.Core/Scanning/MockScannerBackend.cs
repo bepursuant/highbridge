@@ -81,9 +81,7 @@ public sealed class MockScannerBackend : IScannerBackend
 
         bool useFeeder = UsesFeeder(options);
         bool duplex = useFeeder && options.Duplex;
-        // A limited scan consumes sheets so the next job is the next sheet. No limit still sees
-        // the configured stack, which is what repeated one-shot scans do. A flatbed is one shot.
-        int sheets = useFeeder ? SheetCount(scannerId, options.MaxSheets) : 0;
+        int sheets = useFeeder ? TakeAllSheets(scannerId) : 0;
         int pageCount = useFeeder ? sheets * (duplex ? 2 : 1) : 1;
 
         var pages = new List<ScannedPage>(pageCount);
@@ -105,13 +103,6 @@ public sealed class MockScannerBackend : IScannerBackend
         if (!UsesFeeder(options))
         {
             return false;
-        }
-
-        // The configured stack is paper. A limited scan, or a feeder that was created empty,
-        // waits until LoadSheets puts something in the counter.
-        if (options.MaxSheets <= 0 && _options.FeederSheets > 0)
-        {
-            return true;
         }
 
         string scannerId = options.ScannerId ?? FeederId;
@@ -138,25 +129,29 @@ public sealed class MockScannerBackend : IScannerBackend
         }
     }
 
-    private int SheetCount(string scannerId, int maxSheets)
+    /// <summary>
+    /// Every sheet in the feeder. A configured stack stays loaded so the next scan sees it
+    /// again. Sheets put in with <see cref="LoadSheets"/> on an empty feeder are taken once.
+    /// </summary>
+    private int TakeAllSheets(string scannerId)
     {
-        if (maxSheets <= 0)
-        {
-            return _options.FeederSheets > 0 ? _options.FeederSheets : SheetsLeft(scannerId);
-        }
-
         lock (_sheets)
         {
-            if (scannerId == BarcodesId)
+            bool barcodes = scannerId == BarcodesId;
+            int left = barcodes ? _barcodeLeft : _feederLeft;
+            if (_options.FeederSheets == 0)
             {
-                int take = Math.Min(maxSheets, _barcodeLeft);
-                _barcodeLeft -= take;
-                return take;
+                if (barcodes)
+                {
+                    _barcodeLeft = 0;
+                }
+                else
+                {
+                    _feederLeft = 0;
+                }
             }
 
-            int sheets = Math.Min(maxSheets, _feederLeft);
-            _feederLeft -= sheets;
-            return sheets;
+            return left;
         }
     }
 

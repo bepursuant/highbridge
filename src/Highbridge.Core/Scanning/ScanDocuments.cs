@@ -15,7 +15,10 @@ public static class ScanDocuments
             return [];
         }
 
-        int size = options.MaxPagesPerDocument <= 0 ? pages.Count : options.MaxPagesPerDocument;
+        int perSheet = options.Source != PaperSource.Flatbed && options.Duplex ? 2 : 1;
+        int bySheets = options.MaxSheets <= 0 ? pages.Count : options.MaxSheets * perSheet;
+        int byPages = options.MaxPagesPerDocument <= 0 ? pages.Count : options.MaxPagesPerDocument;
+        int size = Math.Max(1, Math.Min(bySheets, byPages));
         var documents = new List<ScannedDocument>();
         for (int start = 0; start < pages.Count; start += size)
         {
